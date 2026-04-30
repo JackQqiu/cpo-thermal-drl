@@ -1,0 +1,165 @@
+# =====================================================================
+# default.yaml — Single source of truth for v2 CPO scheduler hyperparams
+# =====================================================================
+# All other configs in configs/ should set `_inherit: default` and only
+# override the keys that differ from this file.  CLI args (--key value)
+# can override any leaf value at runtime — see training/config_loader.py.
+#
+# Keys are organised mirroring the codebase: env / model / training / ...
+
+# =====================================================================
+# Environment
+# =====================================================================
+env:
+  # Topology
+  num_nodes:     17                     # 1 ASIC + 16 OE (next-gen switch)
+  dt:            0.001                  # 1 ms per RC step
+
+  # Action mode  ∈ {auto_only, agent_only, hybrid}
+  action_mode:   auto_only              # Stage 1 default
+  K_delay:       5
+  delay_fractions: [0.0, 0.25, 0.5, 0.75, 1.0]
+  max_agent_delay_ms: 50.0
+
+  # Thermal thresholds (°C)
+  thermal_target:    75.0               # T_target — desired guardband
+  thermal_guardband: 80.0               # T_pen    — soft-wall starts here
+  thermal_critical:  85.0               # T_crit   — hard wall, truncate
+  mask_temp:         82.0               # action mask: T_i ≥ this → masked
+
+  # Auto-delay
+  max_cooling_steps:   100              # 100 ms cap on env auto-cool
+  precool_target_temp: null             # null → use thermal_target
+
+  # Power model (CPO physics — match generate_matrices.py)
+  asic_active_power:        150.0
+  oe_active_power:           40.0
+  oe_serialization_power:    20.0
+  cpo_bandwidth_gbps:       800.0
+  oe_conversion_delay_ms:    0.005
+  leakage_base_power:        30.0
+  leakage_beta:               0.015
+
+  # Temp-rise heuristics for task→proc edge attrs
+  temp_rise_per_ms_asic: 0.5
+  temp_rise_per_ms_oe:   0.1
+
+  # Curriculum-controllable (overridden in stage configs)
+  initial_temp_range: [25.0, 25.0]      # [lo, hi]; if hi==lo, fixed temp
+  max_dag_size:        null             # null → no DAG-size filter
+  dags_per_episode:    50
+
+  # Data paths
+  dataset_path:   "./data_pipeline/process/alibaba_dags_v2.json"
+  rc_matrix_dir:  null                  # null → autodiscover under
+                                        #   data/thermal_matrics/N{num_nodes}/
+
+# =====================================================================
+# Reward shaping (RewardConfig in envs/reward_shaping.py)
+# =====================================================================
+reward:
+  T_pen:                 80.0           # match env.thermal_guardband
+  T_crit:                85.0           # match env.thermal_critical
+  T_target:              75.0           # match env.thermal_target
+
+  truncate_pen:          20.0
+  soft_wall_max:         10.0
+  soft_wall_scale:        5.0
+  hard_wall_pen:         30.0
+
+  base_step_reward:       1.0
+  time_overhead_w:        2.0
+  cool_avoid_bonus:       2.0
+  cool_waste_pen:         0.5
+  cool_node_bonus:        0.3
+  cool_node_margin:       2.0
+
+  dag_done_bonus:         5.0
+  episode_done_bonus:    20.0
+
+  under_anticipate_pen:   1.0           # hybrid-mode credit-assignment shaping
+
+# =====================================================================
+# Model (Stage C: HeteroEncoder + Actor + DualCritic)
+# =====================================================================
+model:
+  hidden:        128
+  num_layers:    2                      # GNN message-passing rounds
+  num_heads:     4                      # GAT attention heads
+  dropout:       0.1
+  critic_hidden: 256
+
+# =====================================================================
+# Training (PPO main loop)
+# =====================================================================
+training:
+  # Hardware / parallelism
+  num_envs:        16                   # AsyncVectorEnv parallelism
+  device:         "auto"                # auto-detect: cuda:0 if available else cpu
+                                        # (override with cuda:0 / cpu to force)
+
+  # Total budget
+  total_steps:    5_000_000             # cumulative env steps across all envs
+  rollout_length: 256                   # steps per env between PPO updates
+                                        # (so collected per update = 256 × 16)
+
+  # PPO hyper-parameters
+  ppo_epochs:        4
+  num_minibatches:   8                  # split 256×16 = 4096 into 8 mb of 512
+  clip_epsilon:      0.2
+  vf_clip_epsilon:   null               # null → no value-clip; v1 used 0.2
+  gamma:             0.99
+  gae_lambda:        0.95
+  max_grad_norm:     0.5
+  vf_coef:           0.5
+  ent_coef:          0.01
+
+  # Optimiser
+  learning_rate:     3.0e-4
+  lr_schedule:       linear             # ∈ {constant, linear, cosine}
+  adam_eps:          1.0e-5
+
+  # Warm-start (Stage 2 path)
+  warm_start_path:   null               # null → fresh init
+  warm_start_strict: false              # load_state_dict(strict=False)
+                                        # so delay head can be uninitialised
+
+  # Reward normalisation (separate per channel for dual-advantage stability)
+  normalize_rewards: true
+  normalize_obs:     false              # graph features already normalised in env
+
+# =====================================================================
+# Curriculum (Stage D — 3-stage cold→warm→hot)
+# =====================================================================
+curriculum:
+  enabled: true
+  schedule:
+    - name:               cold
+      until_step:         1_000_000
+      initial_temp_range: [25.0, 40.0]
+      max_dag_size:       5
+    - name:               warm
+      until_step:         3_000_000
+      initial_temp_range: [40.0, 65.0]
+      max_dag_size:       15
+    - name:               hot
+      until_step:         null         # null → run to total_steps
+      initial_temp_range: [60.0, 75.0]
+      max_dag_size:       null
+
+# =====================================================================
+# Logging / checkpointing
+# =====================================================================
+logging:
+  log_every_steps:   1_000
+  save_every_steps:  50_000
+  eval_every_steps:  100_000
+  eval_episodes:     30
+  checkpoint_dir:   "checkpoints/cpo_v2"
+  tb_log_dir:       "tb_logs/cpo_v2"
+  run_name:          null               # null → auto-generated from config name + timestamp
+
+# =====================================================================
+# Reproducibility
+# =====================================================================
+seed: 42

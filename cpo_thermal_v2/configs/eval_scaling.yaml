@@ -1,0 +1,81 @@
+# =====================================================================
+# eval_scaling.yaml — Stage E: scaling-curve evaluation
+# =====================================================================
+# Used by evaluate.py to sweep all schedulers across a grid of:
+#     scheduler  ∈ {RoundRobin, HEFT, ThermalHEFT, Decima,
+#                   Ours-auto_only, Ours-agent_only, Ours-hybrid}
+#     num_nodes  ∈ {9, 13, 17, 24, 33}      (5 sizes)
+#     action_mode ∈ {auto_only, agent_only, hybrid}
+#
+# Note that classical baselines (RR/HEFT/ThermalHEFT) only run at
+# action_mode=auto_only — the evaluator skips other cells for them.
+# Ours-{auto_only,agent_only,hybrid} each run at their matching mode.
+#
+# Time budget on V100 (estimated):
+#     ~6 schedulers × ~5 sizes × 500 episodes × ~3 seconds/episode
+#     ≈ 12.5 hours total wall clock (most cells are CPU-only baselines)
+# =====================================================================
+_inherit: default
+
+eval:
+  # ---- Checkpoint to evaluate ----
+  # Override this from the CLI when launching:
+  #     --override eval.checkpoint_path=checkpoints/stage2_hybrid_N17/best.pt
+  checkpoint_path: "checkpoints/stage2_hybrid_N17/best.pt"
+
+  # ---- Statistical settings ----
+  num_episodes:    500                   # per (scheduler, N, mode) cell
+  deterministic:   true                  # argmax: paper convention is deterministic
+  seed_base:       100000                # ep i uses seed_base + i
+  device:          cpu                   # "cpu" or "cuda:0"
+
+  # ---- Grid axes ----
+  num_nodes_list:   [9, 13, 17, 24, 33]
+  action_mode_list: [auto_only, agent_only, hybrid]
+
+  # ---- ThermalHEFT hyperparameter ----
+  T_target: 75.0                         # used by ThermalHEFT cost function
+
+  # ---- Per-cell env overrides ----
+  # We evaluate at moderate-hot (T₀∈[50,65]) where scheduler differences
+  # are most pronounced.  Full-stress evaluation (T₀∈[60,75]) goes in a
+  # separate ``eval_extreme.yaml`` for the paper's stress-test section.
+  initial_temp_range: [50.0, 65.0]
+  max_dag_size:       null
+  dags_per_episode:   20    # Training distribution.  Stage E main
+                            # table is the in-distribution, head-to-head
+                            # comparison.  Long-horizon (OOD) behaviour
+                            # is evaluated separately via
+                            # eval_horizon_scan.yaml.
+                            #
+                            # Rationale:
+                            # - 20 DAGs matches training to make
+                            #   Ours-auto vs Ours-hybrid an apples-
+                            #   to-apples comparison
+                            # - Stage 2 (hybrid) shows no advantage
+                            #   here because Stage 1 already saturates
+                            #   100% completion / 0 violations in this
+                            #   regime — that finding is itself the
+                            #   evidence that pure placement is
+                            #   sufficient at training distribution
+                            # - Stage 2's contribution is then
+                            #   demonstrated separately as horizon
+                            #   generalization (see Section 5.3 in
+                            #   the paper outline).
+
+  # Use HARD truncation: episode ends immediately when any sensor
+  # hits T_crit (85°C).  This matches real-world thermtrip semantics
+  # — when a CPO module hits 85°C, the system stops; you don't get
+  # the chance to "force cool and continue".  Soft truncation
+  # (force-cool until safe, then resume) is convenient for getting
+  # full-schedule makespan numbers from baselines that would
+  # otherwise truncate at ~30%, but it doesn't reflect deployment
+  # reality and was rejected as a data presentation choice.
+  truncate_mode:        hard
+  # The two parameters below are unused in hard mode (kept for
+  # backward-compat with envs that read them):
+  soft_truncate_recovery_temp: 75.0
+  max_soft_recovery_steps:     200
+
+  # ---- Output ----
+  output_dir:      "eval_results/scaling_v2"

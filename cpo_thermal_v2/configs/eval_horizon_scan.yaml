@@ -1,0 +1,75 @@
+# =====================================================================
+# eval_horizon_scan.yaml — Stage E supplementary: Horizon generalization
+# =====================================================================
+# Used by evaluate.py to sweep episode lengths at FIXED N=17, showing
+# that:
+#   - Baselines (HEFT, ThermalHEFT) saturate violations at any horizon
+#     (all truncate before completing the workload anyway).
+#   - Stage 1 (auto_only) violations grow LINEARLY with horizon
+#     (approximately 0.005 / DAG, so 0/20DAG → 0.26/50DAG → 0.47/100DAG).
+#   - Stage 2 (hybrid) maintains HORIZON-INVARIANT 0 violations
+#     across all horizons up to 5x the training distribution.
+#
+# This is the OOD generalization experiment.  It does NOT replace the
+# Stage E main table (eval_scaling.yaml, in-distribution at 20 DAGs);
+# it is a separate paper Section 5.3 demonstrating that Stage 2's
+# anticipatory delay is what enables long-horizon robustness.
+#
+# Time budget on V100 (estimated):
+#   7 schedulers × 1 size × 200 episodes × 4 horizons × 4 settings
+#   ≈ 22,400 episodes
+#   At ~1.5s/episode average across schedulers → ~9-10 hours.
+#   (Most baselines truncate in <1s; Ours-{auto,hybrid} are slower
+#   especially at horizon=200 where they actually run to completion.)
+#
+# Note: this config is run via a custom sbatch wrapper that loops over
+# horizons and over the 4 settings, since evaluate.py only accepts a
+# single dags_per_episode and a single initial_temp_range per call.
+# See scripts/eval_horizon_scan.sbatch.
+# =====================================================================
+_inherit: default
+
+eval:
+  # ---- Checkpoint to evaluate ----
+  checkpoint_path: "checkpoints/stage2_hybrid_N17/best.pt"
+
+  # ---- Statistical settings ----
+  num_episodes:    200      # half of main table; horizon scan is
+                            # supplementary, narrower confidence
+                            # intervals not needed
+  deterministic:   true
+  seed_base:       200000   # different seed range than main eval
+  device:          cpu
+
+  # ---- Grid axes ----
+  # Only N=17 — the headline system size.  We're studying horizon
+  # behaviour, not size scaling (that's the main table's job).
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, agent_only, hybrid]
+
+  T_target: 75.0
+
+  # ---- Per-cell env overrides ----
+  # Initial_temp_range and dags_per_episode are overridden from the
+  # sbatch wrapper to sweep the 4 settings × 4 horizons grid.
+  # Defaults below are what gets used if you launch evaluate.py
+  # directly without overrides (a smoke-test of the hot/50-DAG cell).
+  initial_temp_range: [50.0, 65.0]
+  max_dag_size:       null
+  dags_per_episode:   50    # default; sbatch wrapper sweeps {20,50,100,200}
+
+  # ---- Truncation ----
+  # HARD truncate to mirror the Stage E main table.  For long-horizon
+  # tests, hard truncate is even MORE important: with soft truncate,
+  # a baseline that should have died at DAG 6 instead "survives" by
+  # being force-cooled, completely masking the very property we want
+  # to measure (whether each method can sustain operation).
+  truncate_mode:        hard
+  soft_truncate_recovery_temp: 75.0
+  max_soft_recovery_steps:     200
+
+  # ---- Output ----
+  # The sbatch wrapper sets per-cell output_dir like
+  #   eval_results/horizon_scan_v2/<setting>/dags<H>/
+  # so each (setting, horizon) cell is isolated and resumable.
+  output_dir:      "eval_results/horizon_scan_v2/_default"

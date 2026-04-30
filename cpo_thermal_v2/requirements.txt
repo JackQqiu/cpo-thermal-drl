@@ -1,0 +1,41 @@
+# =====================================================================
+# CPO Thermal-Aware DAG Scheduler v2 — Python dependencies
+# =====================================================================
+#
+# Verified working combination (Mac CPU + V100 server, Python 3.10).
+# Lower bounds reflect API features we actually use; upper bounds are
+# loose since we hit gymnasium 1.x quirks already and handle them.
+#
+# Install with:
+#     pip install -r requirements.txt
+#
+# Note on PyTorch + PyG:
+#     torch_geometric needs to match your torch+CUDA combination.
+#     If `pip install torch_geometric` fails, install torch first,
+#     then follow https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
+#     to pick the matching wheel index for your platform.
+# =====================================================================
+
+# ---- Core ML ----
+torch>=2.0,<3.0
+torch_geometric>=2.4,<3.0      # we use HeteroData, GATv2Conv, Batch.from_data_list
+
+# ---- RL environment ----
+gymnasium>=1.0,<2.0            # 1.x has new vector-env info format; we handle it
+
+# ---- Numerics & I/O ----
+numpy>=1.24,<3.0
+pandas>=2.0,<3.0               # used by evaluation/runner.py for CSV aggregation
+PyYAML>=6.0,<7.0
+networkx>=3.0,<4.0             # used by data_pipeline for DAG enrichment
+
+# ---- Plotting ----
+matplotlib>=3.7,<4.0           # IEEE-style figure rendering in evaluation/plots.py
+
+# ---- TensorBoard (logging) ----
+tensorboard>=2.13,<3.0         # imported via torch.utils.tensorboard.SummaryWriter
+
+# ---- Optional but recommended ----
+# tqdm>=4.65                   # progress bars (we don't use it directly,
+                               #    but it's nice for ad-hoc scripts)
+# pytest>=7.0                  # if you want to run unit tests

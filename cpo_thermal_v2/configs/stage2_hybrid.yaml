@@ -1,0 +1,49 @@
+# =====================================================================
+# stage2_hybrid.yaml — Stage 2: hybrid fine-tune from auto_only warm-start
+# =====================================================================
+# Loads the Stage 1 checkpoint (encoder + placement head + V_placement
+# transferred verbatim; delay head + V_delay freshly initialised).  Trains
+# the full factored agent with the dual-advantage credit-assignment
+# signal, including the under-anticipate penalty in the delay channel.
+#
+# Total: 1.5M steps (was 2M).  Stage 1 in the previous run reached its
+# hot plateau by ~1.5M steps, so 2M of Stage 2 had similar diminishing
+# returns past 1M.  1.5M gives a comfortable buffer.
+#
+# We default warm_start_path to final.pt rather than best.pt because
+# best.pt gets saved at the end of every curriculum stage (including
+# warm), and the hot-stage final.pt has seen the full target distribution.
+# (The curriculum-aware best-selection in train.py also makes best.pt
+# safe, but final.pt is the simplest correct choice.)
+#
+# Expected wall time on 1×V100 + 16 envs: ~3h
+# =====================================================================
+_inherit: default
+
+env:
+  action_mode: hybrid
+
+training:
+  total_steps:        1_500_000          # was 2M
+  learning_rate:      1.0e-4             # lower lr for fine-tune stability
+  warm_start_path:   "checkpoints/stage1_auto_only_N17/best.pt"
+  warm_start_strict:  false              # delay head + V_delay missing → ok
+
+  # Re-warm-up the curriculum at "warm" stage since auto_only model has
+  # already seen the full training distribution.  We skip "cold" entirely.
+
+curriculum:
+  schedule:
+    - name:               warm
+      until_step:           400_000      # was 500k
+      initial_temp_range: [40.0, 65.0]
+      max_dag_size:       15
+    - name:               hot
+      until_step:         null           # null → run to total_steps (1.5M)
+      initial_temp_range: [60.0, 75.0]   # ~1.1M steps in hot
+      max_dag_size:       null
+
+logging:
+  run_name: stage2_hybrid_N17
+  checkpoint_dir: "checkpoints/stage2_hybrid_N17"
+  tb_log_dir:     "tb_logs/stage2_hybrid_N17"

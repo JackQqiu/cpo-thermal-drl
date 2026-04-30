@@ -1,0 +1,43 @@
+# =====================================================================
+# stage1_auto_only.yaml — Stage 1: auto_only warm-up training (N=17)
+# =====================================================================
+# Trains the placement head + V_placement from scratch with the env's
+# automatic thermal-smoothing.  The delay head exists in the model but
+# emits gradient-detached uniform output (see ppo_actor_critic.py), so
+# the saved checkpoint can warm-start any of the three modes later.
+#
+# Total: 3M steps (was 5M).  Cold curriculum compressed because in the
+# previous 5M run, ep_ret in the cold stage plateaued by step ~150k,
+# meaning the remaining ~850k cold steps were entropy-collapsed plateau
+# and contributed almost nothing.  Warm and hot stages do the real
+# learning so they get proportionally more share.
+#
+# Expected wall time on 1×V100 + 16 envs: ~6h
+# =====================================================================
+_inherit: default
+
+env:
+  action_mode: auto_only
+
+training:
+  total_steps: 3_000_000
+
+curriculum:
+  schedule:
+    - name:               cold
+      until_step:           400_000      # was 1M — cold plateaus by 150k anyway
+      initial_temp_range: [25.0, 40.0]
+      max_dag_size:       5
+    - name:               warm
+      until_step:         1_500_000      # was 3M — gets 1.1M to learn placement
+      initial_temp_range: [40.0, 65.0]
+      max_dag_size:       15
+    - name:               hot
+      until_step:         null           # null → run to total_steps (3M)
+      initial_temp_range: [60.0, 75.0]   # 1.5M steps in hot
+      max_dag_size:       null
+
+logging:
+  run_name: stage1_auto_only_N17
+  checkpoint_dir: "checkpoints/stage1_auto_only_N17"
+  tb_log_dir:     "tb_logs/stage1_auto_only_N17"
