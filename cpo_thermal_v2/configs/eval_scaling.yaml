@@ -27,7 +27,9 @@ eval:
   num_episodes:    500                   # per (scheduler, N, mode) cell
   deterministic:   true                  # argmax: paper convention is deterministic
   seed_base:       100000                # ep i uses seed_base + i
-  device:          cpu                   # "cpu" or "cuda:0"
+  device:          cuda:0                # GPU inference for Ours/Decima
+                                          # (~3x faster than CPU on V100;
+                                          # baselines remain CPU-only)
 
   # ---- Grid axes ----
   num_nodes_list:   [9, 13, 17, 24, 33]

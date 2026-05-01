@@ -39,7 +39,7 @@ eval:
                             # intervals not needed
   deterministic:   true
   seed_base:       200000   # different seed range than main eval
-  device:          cpu
+  device:          cuda:0   # GPU inference for Ours/Decima
 
   # ---- Grid axes ----
   # Only N=17 — the headline system size.  We're studying horizon
