@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# === 项目特定：大文件 / 可重生成 ===
+# Checkpoints (大 binary). checkpoints*/ covers checkpoints_old/, checkpoints_v3/, …
+checkpoints*/
+*.pt
+*.pth
+*.ckpt
+
+# Eval results (大 csv，可从 ckpt 重跑)
+eval_results/
+*.csv
+
+# Training logs (tensorboard / 控制台)
+runs/
+tensorboard_logs/
+*.tfevents.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# === LaTeX build 产物（保留 .tex 源） ===
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+
+# 大 PDF（如果你想 review 编译版可注释掉这行）
+# *.pdf
+
+# 数据 (大 trace)
+data/
+trace_data/
+*.npy
+*.npz
+
+# 临时
+*.tmp
+*.bak

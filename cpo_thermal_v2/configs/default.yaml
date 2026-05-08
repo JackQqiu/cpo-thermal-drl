@@ -41,8 +41,11 @@ env:
   leakage_beta:               0.015
 
   # Temp-rise heuristics for task→proc edge attrs
-  temp_rise_per_ms_asic: 0.5
-  temp_rise_per_ms_oe:   0.1
+  # Calibrated against RC matrices (see scripts/calibrate_temp_rise.py):
+  # rate_first_10ms at T0≈70 °C under nominal active power.
+  # OE > ASIC because G_ENV_OE is small and cross-coupling accumulates.
+  temp_rise_per_ms_asic: 0.08
+  temp_rise_per_ms_oe:   0.18
 
   # Curriculum-controllable (overridden in stage configs)
   initial_temp_range: [25.0, 25.0]      # [lo, hi]; if hi==lo, fixed temp

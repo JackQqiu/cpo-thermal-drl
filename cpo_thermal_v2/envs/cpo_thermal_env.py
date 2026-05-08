@@ -229,8 +229,14 @@ class CPOThermalDAGEnvV2(gym.Env):
         leakage_base_power:       float = 30.0,
         leakage_beta:             float = 0.015,
         # ---- temp-rise heuristics for task→proc edge attrs ----
-        temp_rise_per_ms_asic: float = 0.5,
-        temp_rise_per_ms_oe:   float = 0.1,
+        # Calibrated against RC matrices: rate_first_10ms at T0≈70 °C
+        # under nominal active power.  ASIC ≈ 0.08 °C/ms, OE ≈ 0.18 °C/ms
+        # (OE is the bottleneck because G_ENV_OE is small and cross-
+        # coupling accumulates).  Old defaults (0.5 / 0.1) were 6× too
+        # high on ASIC and 2× too low on OE, which mis-led every
+        # est_dT-driven heuristic into thinking ASIC was the hot path.
+        temp_rise_per_ms_asic: float = 0.08,
+        temp_rise_per_ms_oe:   float = 0.18,
         # ---- reward ----
         reward_config: Optional[RewardConfig] = None,
         # ---- RC matrices ----
@@ -801,19 +807,38 @@ class CPOThermalDAGEnvV2(gym.Env):
         total_traffic: float,
         exec_time_ms: float,
     ) -> Tuple[float, bool]:
-        """Lookahead-based auto-delay.
+        """Lookahead-based auto-delay (v2 fix: peak-driven exit).
 
         1. Snapshot the current thermal state.
-        2. Simulate the planned execution (does NOT commit).
-        3. Restore.  If the predicted peak ``≤ thermal_guardband``: no cooling.
-        4. Otherwise insert idle steps until the *target* node falls below
-           ``precool_target_temp`` (or ``max_cooling_steps`` is reached).
+        2. Simulate the planned execution (does NOT commit). Restore.
+        3. If predicted peak <= ``thermal_guardband``: no cooling needed.
+        4. Otherwise insert idle steps and re-simulate the execution
+           from the cooled state after each step. Exit when:
+             - the predicted peak (from the cooled state) is at or
+               below ``thermal_guardband``, or
+             - ``max_cooling_steps`` is reached.
+
+        Note (v2 fix vs v1)
+        -------------------
+        The v1 implementation broke out of the cooling loop when the
+        target node's *current* temperature dropped below
+        ``precool_target_temp``. That gating ignored the heating effect
+        of the upcoming dispatch and frequently let env auto-cool
+        return 0 even when the predicted peak exceeded the guardband.
+        The v2 loop's exit condition is the ACTUAL safety predicate
+        (predicted peak <= guardband), which matches both the paper's
+        description of env auto-cool and the design intent of the
+        ``under_anticipate_pen`` / ``anticipation_bonus`` reward
+        signals in dual-advantage PPO.
 
         Returns
         -------
-        cooling_steps : float (ms)
-        would_violate : bool, True iff lookahead predicted ``> T_pen``.
+        cooling_steps : float (ms of idle cooling actually inserted)
+        would_violate : bool, True iff the initial lookahead predicted
+                        ``> thermal_guardband``.
         """
+        # ---- 1. Initial check: simulate planned execution from the
+        #         current (post-agent-delay) state.
         snap = self.thermal_engine.snapshot()
         try:
             predicted_peak = self._simulate_execution_peak(
@@ -826,21 +851,33 @@ class CPOThermalDAGEnvV2(gym.Env):
         if not would_violate_predicted:
             return 0.0, False
 
-        # Pre-cool with idle power until target node is safe
+        # ---- 2. Pre-cool with idle power, re-simulating after each
+        #         cooling step. This uses the actual RC dynamics inside
+        #         _simulate_execution_peak rather than a static
+        #         current-T threshold, so it correctly accounts for the
+        #         heating that the upcoming dispatch will add.
         cooling_steps = 0
         while cooling_steps < self.max_cooling_steps:
-            if self.thermal_engine.temperatures[target_node] <= self.precool_target_temp:
-                break
+            # Apply one idle cooling step (mutates engine state).
             self.thermal_engine.step(self._compute_power(-1, 0.0))
             cooling_steps += 1
 
-        # Honest accounting: only claim "cooling averted a violation" if we
-        # actually cooled.  When the target node is already at/below the
-        # precool target temperature, no idle steps run and we have made
-        # no scheduling decision to credit — let the truncation path handle it.
-        if cooling_steps == 0:
-            return 0.0, False
+            # Re-check predicted peak from the now-cooled state.
+            snap = self.thermal_engine.snapshot()
+            try:
+                predicted_peak_now = self._simulate_execution_peak(
+                    target_node, total_traffic, exec_time_ms,
+                )
+            finally:
+                self.thermal_engine.restore(snap)
 
+            if predicted_peak_now <= self.thermal_guardband:
+                break
+
+        # If we cooled even one step, the would_violate diagnostic stays
+        # True (initial lookahead saw > guardband). The reward shaping
+        # uses this for the cool_avoid_bonus / under_anticipate_pen
+        # signals.
         return float(cooling_steps), True
 
     def _simulate_execution_peak(
