@@ -1,0 +1,63 @@
+# =====================================================================
+# train_decima_fair.yaml — Fair Decima baseline training
+# =====================================================================
+# Trains a from-scratch Decima implementation that NEVER sees thermal
+# features:
+#   proc_in_dim  = 3   (drops T_norm, dT/dt, leakage, headroom)
+#   edge_dim_t2p = 1   (drops est_temp_rise from task→proc edges)
+#
+# This is the FAIR baseline that addresses the limitation in
+# baselines/decima.py (which reuses our thermal-aware checkpoint with
+# inputs masked, leaking learned thermal behavior through weights).
+#
+# Architecture is otherwise identical to Stage 1 — same GIN encoder,
+# same cross-attention actor, same dual critic.  This isolates the
+# contribution of thermal AWARENESS by holding capacity fixed.
+#
+# Reward is unchanged (still uses thermal violation penalty).  The
+# fairness requirement is about INPUT FEATURES only — Decima would
+# learn from the same makespan + safety reward signal that any thermal-
+# aware deployment provides; the question is whether thermal features
+# in the OBSERVATION are needed.
+#
+# Total: 2M steps (Decima has fewer parameters to learn since input
+# dim is smaller; 2M is sufficient for convergence).
+#
+# Wall time on 1×V100 + 16 envs: ~4h
+# =====================================================================
+_inherit: default
+
+env:
+  action_mode: auto_only       # Decima is placement-only
+  thermal_blind: true          # wrap env in ThermalBlindWrapper —
+                               # strips proc thermal cols + edge
+                               # thermal cols from info['graph_obs']
+                               # at every reset/step
+
+model:
+  # ---- Thermal-blind input dims ----
+  proc_in_dim:  3              # was 7; strips 4 thermal cols
+  edge_dim_t2p: 1              # was 2; strips est_temp_rise
+
+training:
+  total_steps: 2_000_000
+
+curriculum:
+  schedule:
+    - name:               cold
+      until_step:           300_000
+      initial_temp_range: [25.0, 40.0]
+      max_dag_size:       5
+    - name:               warm
+      until_step:         1_000_000
+      initial_temp_range: [40.0, 65.0]
+      max_dag_size:       15
+    - name:               hot
+      until_step:         null            # → 2M total
+      initial_temp_range: [60.0, 75.0]
+      max_dag_size:       null
+
+logging:
+  run_name:       decima_fair_N17
+  checkpoint_dir: "checkpoints/decima_fair_N17"
+  tb_log_dir:     "tb_logs/decima_fair_N17"
