@@ -10,11 +10,9 @@
 # hot plateau by ~1.5M steps, so 2M of Stage 2 had similar diminishing
 # returns past 1M.  1.5M gives a comfortable buffer.
 #
-# We default warm_start_path to final.pt rather than best.pt because
-# best.pt gets saved at the end of every curriculum stage (including
-# warm), and the hot-stage final.pt has seen the full target distribution.
-# (The curriculum-aware best-selection in train.py also makes best.pt
-# safe, but final.pt is the simplest correct choice.)
+# We default warm_start_path to best.pt (best validation episode return).
+# train.py's curriculum-aware best-selection ensures best.pt reflects the
+# hot-stage policy (the same distribution Stage 2 will fine-tune on).
 #
 # Expected wall time on 1×V100 + 16 envs: ~3h
 # =====================================================================
