@@ -289,12 +289,28 @@ def train(config: Dict[str, Any]) -> None:
     model = PPOActorCritic(
         action_mode = config["env"]["action_mode"],
         K_delay     = config["env"]["K_delay"],
+        # Encoder input dims — defaulting to the full thermal-aware
+        # feature set; can be reduced in train_decima_fair config to
+        # remove thermal info.
+        task_in_dim  = model_cfg.get("task_in_dim",  8),
+        proc_in_dim  = model_cfg.get("proc_in_dim",  7),
+        edge_dim_t2p = model_cfg.get("edge_dim_t2p", 2),
         hidden      = model_cfg["hidden"],
         num_layers  = model_cfg["num_layers"],
         num_heads   = model_cfg["num_heads"],
         dropout     = model_cfg["dropout"],
         critic_hidden = model_cfg["critic_hidden"],
     ).to(device)
+
+    # Thermal-blind flag: if True, build_batch strips proc_x cols 0:4
+    # and edges_t2p_attr col 1 before constructing the PyG Batch.  This
+    # is THE strip path for fair Decima training — env-side wrapping
+    # was unreliable across AsyncVectorEnv subprocess boundaries.
+    thermal_blind = bool(config.get("env", {}).get("thermal_blind", False))
+    if thermal_blind:
+        print(f"[train] thermal_blind=True — build_batch will strip "
+              f"thermal features from every graph_obs (proc_x: 7→3, "
+              f"edges_t2p_attr: 2→1)")
 
     optimizer = make_optimizer(model, train_cfg)
 
@@ -332,6 +348,7 @@ def train(config: Dict[str, Any]) -> None:
         normalize_advantages = train_cfg.get("normalize_advantages", True),
         delay_loss_coef = delay_loss_coef,
         device          = device,
+        thermal_blind   = thermal_blind,
     )
 
     # ---------------- Rollout buffer + reward normaliser ----------------
@@ -433,7 +450,8 @@ def train(config: Dict[str, Any]) -> None:
                             f"penalties) and the cooling logic."
                         )
 
-            batch = build_batch(graph_obs_list, action_masks, device=device)
+            batch = build_batch(graph_obs_list, action_masks,
+                                device=device, thermal_blind=thermal_blind)
             with torch.no_grad():
                 act_out = model.act(batch)
             actions_t = act_out["action"]
@@ -513,7 +531,8 @@ def train(config: Dict[str, Any]) -> None:
 
         # ============ TAIL VALUES (for GAE bootstrap) ============
         with torch.no_grad():
-            tail_batch = build_batch(graph_obs_list, action_masks, device=device)
+            tail_batch = build_batch(graph_obs_list, action_masks,
+                                     device=device, thermal_blind=thermal_blind)
             v_p_tail, v_d_tail = model.get_value(tail_batch)
 
         # ============ PPO UPDATE ============

@@ -117,6 +117,7 @@ class PPOTrainer:
         normalize_advantages: bool = True,
         delay_loss_coef: float = 1.0,
         device:          str   = "cpu",
+        thermal_blind:   bool  = False,
     ):
         self.model = model
         self.optim = optimizer
@@ -132,6 +133,7 @@ class PPOTrainer:
         self.normalize_advantages = bool(normalize_advantages)
         self.delay_loss_coef = float(delay_loss_coef)
         self.device          = device
+        self.thermal_blind   = bool(thermal_blind)
 
     # =================================================================
     # Top-level update
@@ -232,7 +234,9 @@ class PPOTrainer:
         the caller accumulates).
         """
         # 1. Build the PyG Batch from the ragged graph_obs + masks
-        batch = build_batch(mb["graph_obs"], mb["action_masks"], device=self.device)
+        batch = build_batch(mb["graph_obs"], mb["action_masks"],
+                            device=self.device,
+                            thermal_blind=self.thermal_blind)
 
         # 2. Forward through the actor-critic
         out = self.model.evaluate_actions(batch, mb["actions"].to(self.device))

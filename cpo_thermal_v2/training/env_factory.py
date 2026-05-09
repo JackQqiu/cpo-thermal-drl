@@ -121,14 +121,52 @@ def make_single_env(
     config: Dict[str, Any],
     seed:   Optional[int] = None,
 ) -> CPOThermalDAGEnvV2:
-    """Build one env instance from the config dict (callable from a worker)."""
+    """Build one env instance from the config dict (callable from a worker).
+
+    If ``config['env'].get('thermal_blind', False)`` is True, the env's
+    ``_build_graph_obs`` method is monkey-patched to return a thermal-
+    blind version of the graph dict (proc_x stripped to 3 cols, edge
+    attr stripped to 1 col).  Used for fair-Decima baseline training.
+    """
     kwargs = _make_env_kwargs(config)
     env = CPOThermalDAGEnvV2(**kwargs)
+    if config.get("env", {}).get("thermal_blind", False):
+        _install_thermal_blind_patch(env)
     if seed is not None:
-        # gymnasium uses .reset(seed=...) rather than .seed(); seed-on-init
-        # is the standard convention for vector envs.
         env.reset(seed=int(seed))
     return env
+
+
+def _install_thermal_blind_patch(env: "CPOThermalDAGEnvV2") -> None:
+    """Monkey-patch env._build_graph_obs so it ALWAYS returns a thermal-
+    blind graph dict.  This is more robust than wrapping at the gym
+    layer because every code path that emits info["graph_obs"] goes
+    through _build_graph_obs() — there's no way for a thermal-aware
+    dict to slip through.
+
+    Strips:
+      - proc_x:          7 cols → 3 cols  (drop T_norm, dT/dt, leakage, headroom)
+      - edges_t2p_attr:  2 cols → 1 col   (drop est_temp_rise)
+    """
+    original = env._build_graph_obs
+
+    def _blind_build_graph_obs(self_env=env):
+        g = original()
+        # proc_x: list of [7-d float] — strip cols 0:4
+        proc_x = g.get("proc_x", None)
+        if proc_x is not None:
+            arr = np.asarray(proc_x, dtype=np.float32)
+            if arr.ndim == 2 and arr.shape[1] == 7:
+                g["proc_x"] = arr[:, 4:7].tolist()
+        # edges_t2p_attr: list of [est_time, est_rise] — keep est_time only
+        edges = g.get("edges_t2p_attr", None)
+        if edges is not None:
+            arr = np.asarray(edges, dtype=np.float32)
+            if arr.ndim == 2 and arr.shape[1] == 2:
+                g["edges_t2p_attr"] = arr[:, 0:1].tolist()
+        return g
+
+    env._build_graph_obs = _blind_build_graph_obs
 
 
 def _env_thunk(config: Dict[str, Any], seed: int) -> Callable[[], gym.Env]:

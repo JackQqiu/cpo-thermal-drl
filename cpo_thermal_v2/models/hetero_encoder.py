@@ -276,11 +276,21 @@ class HeteroEncoder(nn.Module):
 def graph_obs_to_hetero_data(
     graph_obs: dict,
     device: torch.device | str = "cpu",
+    edge_dim_t2p: int = 2,
 ) -> HeteroData:
     """Convert one ``info['graph_obs'][0]`` dict to a PyG :class:`HeteroData`.
 
     The env emits plain Python lists (for AsyncVectorEnv pickling); here we
     materialise them as torch tensors on the requested device.
+
+    Parameters
+    ----------
+    edge_dim_t2p : int
+        Expected dim of task→proc edge attrs.  Default 2 ([est_time,
+        est_rise]); pass 1 for fair-Decima where est_rise has been
+        stripped.  This matters for the empty-edge fast path which
+        creates a zeros tensor of shape (0, edge_dim_t2p) — wrong dim
+        causes shape-mismatch errors when batched with non-empty cells.
 
     Notes
     -----
@@ -331,7 +341,7 @@ def graph_obs_to_hetero_data(
     ei, ea = _edges("edges_p2p", "edges_p2p_attr", 1)
     data[ET_P2P].edge_index = ei
     data[ET_P2P].edge_attr  = ea
-    ei, ea = _edges("edges_t2p", "edges_t2p_attr", 2)
+    ei, ea = _edges("edges_t2p", "edges_t2p_attr", edge_dim_t2p)
     data[ET_T2P].edge_index = ei
     data[ET_T2P].edge_attr  = ea
     return data

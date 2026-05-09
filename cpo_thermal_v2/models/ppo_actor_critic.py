@@ -77,6 +77,7 @@ class PPOActorCritic(nn.Module):
         # Encoder hyperparams
         task_in_dim:  int = 8,
         proc_in_dim:  int = 7,
+        edge_dim_t2p: int = 2,    # task→proc edge dim (2=full, 1=fair-Decima)
         hidden:       int = 128,
         num_layers:   int = 2,
         num_heads:    int = 4,
@@ -92,7 +93,7 @@ class PPOActorCritic(nn.Module):
 
         self.encoder = HeteroEncoder(
             task_in_dim=task_in_dim, proc_in_dim=proc_in_dim,
-            edge_dim_t2t=1, edge_dim_p2p=1, edge_dim_t2p=2,
+            edge_dim_t2t=1, edge_dim_p2p=1, edge_dim_t2p=edge_dim_t2p,
             hidden=hidden, num_layers=num_layers,
             heads=num_heads, dropout=dropout,
         )
@@ -354,16 +355,70 @@ def build_batch(
     graph_obs_list: list,
     action_masks:   list,                    # list of np.ndarray bool, len=B
     device: torch.device | str = "cpu",
+    thermal_blind:  bool = False,
 ) -> Batch:
     """Convert ``B`` env-emitted graph_obs dicts (+ their action masks) into
-    a single PyG :class:`Batch` ready for ``act`` / ``evaluate_actions``."""
+    a single PyG :class:`Batch` ready for ``act`` / ``evaluate_actions``.
+
+    Parameters
+    ----------
+    thermal_blind : bool
+        If True, strip thermal information from each graph_obs before
+        constructing the hetero data:
+          - proc_x:          7 cols → 3 cols (drop T_norm, dT/dt,
+                             leakage, headroom — keep busy/remaining/is_ASIC)
+          - edges_t2p_attr:  2 cols → 1 col  (drop est_temp_rise — keep
+                             est_exec_time)
+        This is used for fair-Decima training/inference — the model is
+        constructed with proc_in_dim=3 + edge_dim_t2p=1, and this flag
+        ensures the obs dict matches that input shape regardless of what
+        the env emits.  More robust than env-side wrapping because it
+        runs in the main training process (no AsyncVectorEnv subprocess
+        pickle issues).
+    """
     import numpy as np
+
+    edge_dim_t2p = 1 if thermal_blind else 2
 
     data_list = []
     for g, m in zip(graph_obs_list, action_masks):
-        d = graph_obs_to_hetero_data(g, device=device)
-        # Attach the action mask on the proc node store so PyG batches it.
+        if thermal_blind:
+            g = _strip_thermal_from_graph_obs(g)
+        d = graph_obs_to_hetero_data(g, device=device,
+                                      edge_dim_t2p=edge_dim_t2p)
         m_arr = np.asarray(m, dtype=bool).reshape(-1)
         d["proc"].action_mask = torch.tensor(m_arr, dtype=torch.bool, device=device)
         data_list.append(d)
     return Batch.from_data_list(data_list)
+
+
+def _strip_thermal_from_graph_obs(g: dict) -> dict:
+    """Return a SHALLOW COPY of ``g`` with thermal info stripped out.
+
+    Strips:
+      - proc_x:          (N, 7) → (N, 3)  (drop cols 0:4)
+      - edges_t2p_attr:  (E, 2) → (E, 1)  (drop col 1)
+
+    All other keys are passed through by reference (cheap shallow copy).
+    Idempotent: if shapes are already (N, 3) / (E, 1), returns g unchanged.
+    """
+    import numpy as np
+
+    new_g = dict(g)   # shallow copy — only the two keys we modify diverge
+
+    # ---- proc_x ----
+    proc_x = g.get("proc_x", None)
+    if proc_x is not None:
+        arr = np.asarray(proc_x, dtype=np.float32)
+        if arr.ndim == 2 and arr.shape[1] == 7:
+            new_g["proc_x"] = arr[:, 4:7].tolist()
+        # else: already 3-col, or empty, or unexpected — leave alone
+
+    # ---- edges_t2p_attr ----
+    edges = g.get("edges_t2p_attr", None)
+    if edges is not None:
+        arr = np.asarray(edges, dtype=np.float32)
+        if arr.ndim == 2 and arr.shape[1] == 2:
+            new_g["edges_t2p_attr"] = arr[:, 0:1].tolist()
+
+    return new_g

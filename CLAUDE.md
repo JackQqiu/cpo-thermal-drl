@@ -533,6 +533,26 @@ cpo_thermal_v2/
 
 ---
 
+## Known paper-code deviations (for Stage 6 paper revision)
+
+1. Stage 1 training budget — paper §4.x 写 5×10⁶ steps,
+   configs/stage1_auto_only.yaml 实际是 3×10⁶ steps。yaml 注释解释
+   "cold stage ep_ret plateaued by step ~150k", 是有意的实验决定。
+   Stage 6 处理方向 (默认 Option A): 改 paper 反映 yaml 实测, 加 footnote
+   解释 plateau 现象。Option B (改 yaml 回 5M 重训) 不推荐 —— 实测已证
+   cold 早 plateau, 多训没价值。
+
+2. Stage 1 curriculum 切换点 — paper 写 cold→warm at 1×10⁶,
+   stage1_auto_only.yaml 实际 4×10⁵。同上, Option A 推荐:
+   改 paper 反映 yaml。
+
+3. Stage 2 budget — paper 写 1.5×10⁶, yaml 1.5M, 一致 ✓
+
+这三条记下不阻塞 Stage 0 / HK-1 commit, 也不阻塞 Stage 1 重训 (用
+yaml 实际值跑就好)。Stage 6 paper revision 时一并处理。
+
+---
+
 ## 7. 何时回报 chat 不继续推进
 
 Claude Code 遇到下面情况时**停下来回报，不要硬推**：
