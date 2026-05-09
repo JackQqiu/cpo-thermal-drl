@@ -378,14 +378,27 @@ def build_batch(
     """
     import numpy as np
 
+    # All three encoder-input dims are derived from thermal_blind, mirroring
+    # paper §5.1's spec for Ours vs Ours-NoThermal:
+    #     thermal_blind=False (Ours):           task=8, proc=7, edge_t2p=2
+    #     thermal_blind=True  (Ours-NoThermal): task=8, proc=3, edge_t2p=1
+    # These dims feed graph_obs_to_hetero_data's empty-list fast path so
+    # the (0, dim) zeros tensors match the encoder's nn.Linear input shape.
     edge_dim_t2p = 1 if thermal_blind else 2
+    proc_in_dim  = 3 if thermal_blind else 7
+    task_in_dim  = 8  # paper-invariant; verified no yaml overrides as of HK-1.5.5
+                      # (run: grep -rn task_in_dim cpo_thermal_v2/configs/)
+                      # if you ever override task_in_dim in a yaml, you must
+                      # extend build_batch to derive it (currently hardcoded).
 
     data_list = []
     for g, m in zip(graph_obs_list, action_masks):
         if thermal_blind:
             g = _strip_thermal_from_graph_obs(g)
         d = graph_obs_to_hetero_data(g, device=device,
-                                      edge_dim_t2p=edge_dim_t2p)
+                                      edge_dim_t2p=edge_dim_t2p,
+                                      task_in_dim=task_in_dim,
+                                      proc_in_dim=proc_in_dim)
         m_arr = np.asarray(m, dtype=bool).reshape(-1)
         d["proc"].action_mask = torch.tensor(m_arr, dtype=torch.bool, device=device)
         data_list.append(d)

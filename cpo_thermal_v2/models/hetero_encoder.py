@@ -277,6 +277,8 @@ def graph_obs_to_hetero_data(
     graph_obs: dict,
     device: torch.device | str = "cpu",
     edge_dim_t2p: int = 2,
+    task_in_dim:  int = 8,
+    proc_in_dim:  int = 7,
 ) -> HeteroData:
     """Convert one ``info['graph_obs'][0]`` dict to a PyG :class:`HeteroData`.
 
@@ -291,6 +293,18 @@ def graph_obs_to_hetero_data(
         stripped.  This matters for the empty-edge fast path which
         creates a zeros tensor of shape (0, edge_dim_t2p) — wrong dim
         causes shape-mismatch errors when batched with non-empty cells.
+    task_in_dim : int
+        Expected task-feature dim.  Default 8 (matches
+        ``dag_parser.task_features`` + Ours full schema).  Used by the
+        empty-task fast path which creates a zeros tensor of shape
+        (0, task_in_dim) when ``graph_obs["task_x"]`` is empty (e.g.
+        the brief moment between DAG completion and the next DAG load).
+        Wrong dim causes (1, 0) vs (8, 128) matmul errors at encoder
+        forward when PyG batches the empty cell with non-empty siblings.
+    proc_in_dim : int
+        Expected proc-feature dim.  Default 7 (Ours full); pass 3 for
+        Ours-NoThermal (thermal cols dropped).  Same empty-list
+        fast-path rationale as ``task_in_dim`` and ``edge_dim_t2p``.
 
     Notes
     -----
@@ -302,11 +316,27 @@ def graph_obs_to_hetero_data(
       the actor's cross-attention head can grab it after batching.
     """
     data = HeteroData()
-    # Node features
-    data["task"].x = torch.tensor(graph_obs["task_x"], dtype=torch.float32,
-                                  device=device)
-    data["proc"].x = torch.tensor(graph_obs["proc_x"], dtype=torch.float32,
-                                  device=device)
+    # Node features (with empty-list fallback mirroring the edge path
+    # below).  graph_obs["task_x"] / ["proc_x"] can be [] briefly
+    # between DAG completion and reload, producing torch.tensor([]) of
+    # shape (0,) rather than (0, dim) — downstream PyG
+    # Batch.from_data_list collapses to (1, 0), then encoder's
+    # nn.Linear(dim, hidden) raises shape-mismatch.
+    task_x_list = graph_obs["task_x"]
+    if len(task_x_list) == 0:
+        data["task"].x = torch.zeros((0, task_in_dim),
+                                     dtype=torch.float32, device=device)
+    else:
+        data["task"].x = torch.tensor(task_x_list,
+                                      dtype=torch.float32, device=device)
+
+    proc_x_list = graph_obs["proc_x"]
+    if len(proc_x_list) == 0:
+        data["proc"].x = torch.zeros((0, proc_in_dim),
+                                     dtype=torch.float32, device=device)
+    else:
+        data["proc"].x = torch.tensor(proc_x_list,
+                                      dtype=torch.float32, device=device)
     # Optional: keep the index of the task being scheduled this step
     if "current_task_idx" in graph_obs:
         data["task"].current_idx = torch.tensor(
