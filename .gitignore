@@ -60,3 +60,6 @@ trace_data/
 # 临时
 *.tmp
 *.bak
+# Large dataset files (Alibaba 2021 trace, processed DAGs)
+cpo_thermal_v2/data_pipeline/process/*.json
+data_pipeline/process/*.json
