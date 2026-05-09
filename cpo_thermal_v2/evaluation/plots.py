@@ -71,6 +71,12 @@ _PALETTE = {
     "HGATE-PPO":                 "#8A5C3A",     # warm brown (Stage 3 future)
 }
 
+_THRESHOLD_COLORS = {
+    "T_pen":  "#C9A227",   # mustard yellow — warning / soft wall
+    "T_crit": "#A1202F",   # dark red — critical / hard wall
+}
+# Reference lines, NOT in _PALETTE to avoid scheduler-color collision.
+
 
 def _color(scheduler: str) -> str:
     return _PALETTE.get(scheduler, "#000000")
@@ -83,6 +89,7 @@ def plot_scaling_curves(
     df: pd.DataFrame,
     out_dir: str,
     metrics: Optional[List[str]] = None,
+    legend_loc: Optional[str] = None,
 ) -> None:
     """For each metric, plot one curve per scheduler vs num_nodes.
 
@@ -104,7 +111,7 @@ def plot_scaling_curves(
     for metric in metrics:
         if metric not in df.columns:
             continue
-        fig, ax = plt.subplots(figsize=(5.0, 3.4))
+        fig, ax = plt.subplots(figsize=(5.5, 3.5))
 
         for sched in schedulers:
             sub = df[df["scheduler"] == sched].dropna(subset=[metric])
@@ -119,15 +126,21 @@ def plot_scaling_curves(
             ax.errorbar(
                 agg["num_nodes"], agg["mean"], yerr=ci,
                 marker="o", linestyle="-",
+                markersize=5, linewidth=1.5,
                 color=_color(sched),
                 label=sched,
-                capsize=3, elinewidth=0.8,
+                capsize=4, elinewidth=1.0,
             )
 
         ax.set_xlabel("Number of processors (N)")
         ax.set_ylabel(_pretty_metric(metric))
         ax.grid(True, alpha=0.3)
-        ax.legend(frameon=True, loc="best", ncol=1)
+        if legend_loc is None:
+            # Default: legend outside the plot (paper-figure friendly)
+            ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left',
+                      borderaxespad=0., frameon=True, fontsize=8)
+        else:
+            ax.legend(frameon=True, loc=legend_loc, ncol=1, fontsize=8)
         fig.tight_layout()
         for ext in ("pdf", "png"):
             fig.savefig(os.path.join(out_dir, f"scaling_{metric}.{ext}"))
@@ -142,6 +155,7 @@ def plot_box_per_metric(
     out_dir: str,
     metrics: Optional[List[str]] = None,
     num_nodes_focus: Optional[int] = None,
+    group_annotation: Optional[Dict[str, List[str]]] = None,
 ) -> None:
     """One box plot per (metric, num_nodes) cell, comparing all schedulers.
 
@@ -167,7 +181,7 @@ def plot_box_per_metric(
             if sub.empty:
                 continue
 
-            fig, ax = plt.subplots(figsize=(5.0, 3.4))
+            fig, ax = plt.subplots(figsize=(7.0, 3.5))
             data    = []
             labels  = []
             colors  = []
@@ -185,16 +199,45 @@ def plot_box_per_metric(
             )
             for patch, c in zip(bp["boxes"], colors):
                 patch.set_facecolor(c)
-                patch.set_alpha(0.6)
+                patch.set_alpha(0.85)
                 patch.set_edgecolor("black")
             for med in bp["medians"]:
                 med.set_color("black")
                 med.set_linewidth(1.2)
 
+            # Threshold lines for peak_temp_episode (paper §3 T_pen=80, T_crit=85)
+            if metric == "peak_temp_episode":
+                ax.axhline(80.0, ls="--", color=_THRESHOLD_COLORS["T_pen"],
+                           alpha=0.7, linewidth=1.0)
+                ax.axhline(85.0, ls="--", color=_THRESHOLD_COLORS["T_crit"],
+                           alpha=0.7, linewidth=1.0)
+                xmax = ax.get_xlim()[1]
+                ax.text(xmax * 0.99, 80.4, r"$T_{\mathrm{pen}}=80\,°C$",
+                        ha="right", va="bottom", fontsize=8,
+                        color=_THRESHOLD_COLORS["T_pen"])
+                ax.text(xmax * 0.99, 85.4, r"$T_{\mathrm{crit}}=85\,°C$",
+                        ha="right", va="bottom", fontsize=8,
+                        color=_THRESHOLD_COLORS["T_crit"])
+
             ax.set_ylabel(_pretty_metric(metric))
             ax.set_title(f"N = {N}")
+
+            # Optional group annotations along the top axis
+            if group_annotation:
+                label_to_idx = {lbl: i for i, lbl in enumerate(labels)}
+                for grp_name, grp_members in group_annotation.items():
+                    idxs = [label_to_idx[m] for m in grp_members
+                            if m in label_to_idx]
+                    if not idxs:
+                        continue
+                    center_x = (min(idxs) + max(idxs)) / 2 + 1
+                    ax.text(center_x, 1.02, grp_name,
+                            transform=ax.get_xaxis_transform(),
+                            ha="center", va="bottom",
+                            fontstyle="italic", fontsize=9, color="#444444")
+
             ax.grid(True, alpha=0.3, axis="y")
-            plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+            plt.setp(ax.get_xticklabels(), rotation=35, ha="right")
             fig.tight_layout()
             for ext in ("pdf", "png"):
                 fig.savefig(os.path.join(out_dir, f"box_{metric}_N{N}.{ext}"))
@@ -210,7 +253,10 @@ def plot_rho_analysis(
     schedulers_to_plot: Optional[List[str]] = None,
     num_nodes_focus:    int = 17,
 ) -> None:
-    """Scatter of normalised makespan vs DAG ρ (communication-bound proxy).
+    """⚠ DEPRECATED CANDIDATE: not currently referenced in draft__6_.tex.
+    Review before paper revision; remove if confirmed unused.
+
+    Scatter of normalised makespan vs DAG ρ (communication-bound proxy).
 
     Goal: visualise whether the RL agent's advantage is uniform across
     the DAG distribution or concentrated on certain ρ ranges.
@@ -272,7 +318,10 @@ def plot_proc_utilisation(
     out_dir: str,
     num_nodes_focus: int = 17,
 ) -> None:
-    """Heatmap of mean per-proc utilisation across schedulers.
+    """⚠ DEPRECATED CANDIDATE: not currently referenced in draft__6_.tex.
+    Review before paper revision; remove if confirmed unused.
+
+    Heatmap of mean per-proc utilisation across schedulers.
 
     Reveals e.g. that HEFT pushes everything to ASIC (proc 0) while
     Ours-hybrid spreads load across OEs.
