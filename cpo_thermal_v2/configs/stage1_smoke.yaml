@@ -1,0 +1,43 @@
+# =====================================================================
+# stage1_smoke.yaml — Stage 1 smoke test (CPU, ~5-10 min on hpib node)
+# =====================================================================
+# Goal: verify the full Stage 1 train loop works end-to-end on the
+# fixed env after HK-1 / HK-2 changes. NOT a learning run — too short
+# to learn anything. Just exercises:
+#   - env reset / step
+#   - PPO update (forward + backward + optimizer.step + clipping)
+#   - ckpt save path writable
+#   - no NaN / inf / shape mismatch
+#
+# Trigger ~4 PPO updates total. Each update consumes a rollout of
+# rollout_length × num_envs = 128 × 2 = 256 steps.
+# =====================================================================
+_inherit: default
+
+env:
+  action_mode: auto_only
+
+training:
+  num_envs:        2                   # CPU-friendly
+  rollout_length:  128                 # half of default 256
+  total_steps:     1024                # 4 PPO updates
+  num_minibatches: 4                   # 256 / 4 = 64 per minibatch
+  device:          cpu                 # force CPU even if cuda available
+
+curriculum:
+  schedule:
+    - name:               cold
+      until_step:         1024         # full smoke stays in cold
+      initial_temp_range: [25.0, 40.0]
+      max_dag_size:       5
+
+logging:
+  log_every_steps:   100
+  save_every_steps:  256               # force at least 4 saves
+  eval_every_steps:  100000            # disable eval (won't trigger)
+  eval_episodes:     0
+  run_name:          stage1_smoke
+  checkpoint_dir:    "checkpoints/stage1_smoke"
+  tb_log_dir:        "tb_logs/stage1_smoke"
+
+seed: 42
