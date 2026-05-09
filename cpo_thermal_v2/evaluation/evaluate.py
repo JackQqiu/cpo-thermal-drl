@@ -53,35 +53,82 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
     Factory signature: ``factory(num_nodes, action_mode) -> BaseScheduler``.
     Schedulers that don't support a given action_mode raise ValueError
     inside the factory; runner skips those cells.
+
+    Filtering
+    ---------
+    If ``eval_cfg['scheduler_filter']`` is set to a list of names (e.g.
+    ``["Decima"]``), only those schedulers are built.  Used for re-running
+    a single scheduler (e.g. fair Decima after retraining) without
+    redoing all the other baselines.
     """
     from cpo_thermal_v2.baselines import (
         RoundRobinScheduler, HEFTScheduler, ThermalHEFTScheduler,
+        ThrottledHEFTScheduler,
     )
+
+    scheduler_filter = eval_cfg.get("scheduler_filter", None)
+    if scheduler_filter is not None:
+        scheduler_filter = set(scheduler_filter)
+        print(f"[evaluate] scheduler_filter active: only running "
+              f"{sorted(scheduler_filter)}")
+
+    def _included(name: str) -> bool:
+        return scheduler_filter is None or name in scheduler_filter
 
     factories = []
 
     # --- Classical baselines (placement only) ---
-    def rr_factory(num_nodes: int, action_mode: str):
-        if action_mode != "auto_only":
-            # RR doesn't know about delay; only meaningful in auto_only
-            raise ValueError("RoundRobin only supports auto_only env")
-        return RoundRobinScheduler(action_mode=action_mode)
-    factories.append(("RoundRobin", rr_factory))
+    if _included("RoundRobin"):
+        def rr_factory(num_nodes: int, action_mode: str):
+            if action_mode != "auto_only":
+                raise ValueError("RoundRobin only supports auto_only env")
+            return RoundRobinScheduler(action_mode=action_mode)
+        factories.append(("RoundRobin", rr_factory))
 
-    def heft_factory(num_nodes: int, action_mode: str):
-        if action_mode != "auto_only":
-            raise ValueError("HEFT only supports auto_only env")
-        return HEFTScheduler(num_nodes=num_nodes, action_mode=action_mode)
-    factories.append(("HEFT", heft_factory))
+    if _included("HEFT"):
+        def heft_factory(num_nodes: int, action_mode: str):
+            if action_mode != "auto_only":
+                raise ValueError("HEFT only supports auto_only env")
+            return HEFTScheduler(num_nodes=num_nodes, action_mode=action_mode)
+        factories.append(("HEFT", heft_factory))
 
-    def th_factory(num_nodes: int, action_mode: str):
-        if action_mode != "auto_only":
-            raise ValueError("ThermalHEFT only supports auto_only env")
-        return ThermalHEFTScheduler(
-            num_nodes=num_nodes, action_mode=action_mode,
-            T_target=eval_cfg.get("T_target", 75.0),
-        )
-    factories.append(("ThermalHEFT", th_factory))
+    if _included("ThermalHEFT"):
+        def th_factory(num_nodes: int, action_mode: str):
+            if action_mode != "auto_only":
+                raise ValueError("ThermalHEFT only supports auto_only env")
+            return ThermalHEFTScheduler(
+                num_nodes=num_nodes, action_mode=action_mode,
+                T_target=eval_cfg.get("T_target", 75.0),
+            )
+        factories.append(("ThermalHEFT", th_factory))
+
+    # --- Throttled-HEFT (reactive thermal stall on the delay head) ---
+    # Runs in BOTH hybrid and agent_only modes (two separate rows in
+    # the results), so the paper can show:
+    #   - hybrid:     env auto-cool active; near-zero violations
+    #   - agent_only: agent-only cooling; slack=0 critical-path tasks
+    #                 receive 0 ms cooling, exposing the limit of
+    #                 reactive control vs Ours-* anticipatory control
+    for _thr_mode in ("hybrid", "agent_only"):
+        _thr_label = f"Throttled-HEFT-{_thr_mode}"
+        if not _included(_thr_label):
+            continue
+
+        def make_thr_factory(_mode=_thr_mode, _label=_thr_label):
+            def _f(num_nodes: int, action_mode: str):
+                if action_mode != _mode:
+                    raise ValueError(
+                        f"{_label} only runs at action_mode={_mode}"
+                    )
+                return ThrottledHEFTScheduler(
+                    action_mode   = action_mode,
+                    num_nodes     = num_nodes,
+                    T_crit        = eval_cfg.get("T_crit", 85.0),
+                    safety_margin = eval_cfg.get(
+                        "throttled_heft_safety_margin", 0.0),
+                )
+            return _f
+        factories.append((_thr_label, make_thr_factory()))
 
     # --- Trained model variants ---
     ckpt = eval_cfg.get("checkpoint_path")
@@ -95,23 +142,48 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
               "skipping trained schedulers.")
         return factories
 
-    # Decima (loads ckpt with thermal features masked)
-    try:
-        from cpo_thermal_v2.baselines import DecimaScheduler
+    # Decima — fair version (separately trained, no thermal features
+    # in input or edge attr) is preferred.
+    if _included("Decima"):
+        decima_fair_ckpt = eval_cfg.get("decima_fair_ckpt", None)
+        if decima_fair_ckpt:
+            try:
+                from cpo_thermal_v2.baselines.decima_fair import DecimaFairScheduler
 
-        def decima_factory(num_nodes: int, action_mode: str):
-            if action_mode != "auto_only":
-                raise ValueError("Decima baseline only runs in auto_only mode")
-            return DecimaScheduler(
-                ckpt_path     = ckpt,
-                num_nodes     = num_nodes,
-                action_mode   = action_mode,
-                deterministic = bool(eval_cfg.get("deterministic", True)),
-                device        = eval_cfg.get("device", "cpu"),
-            )
-        factories.append(("Decima", decima_factory))
-    except ImportError as e:
-        print(f"[evaluate] DecimaScheduler unavailable: {e}")
+                def decima_factory(num_nodes: int, action_mode: str):
+                    if action_mode != "auto_only":
+                        raise ValueError(
+                            "Decima baseline only runs in auto_only mode")
+                    return DecimaFairScheduler(
+                        ckpt_path     = decima_fair_ckpt,
+                        num_nodes     = num_nodes,
+                        deterministic = bool(eval_cfg.get("deterministic", True)),
+                        device        = eval_cfg.get("device", "cpu"),
+                    )
+                factories.append(("Decima", decima_factory))
+                print(f"[evaluate] Using FAIR Decima from {decima_fair_ckpt}")
+            except ImportError as e:
+                print(f"[evaluate] DecimaFairScheduler unavailable: {e}")
+        else:
+            try:
+                from cpo_thermal_v2.baselines import DecimaScheduler
+
+                def decima_factory(num_nodes: int, action_mode: str):
+                    if action_mode != "auto_only":
+                        raise ValueError(
+                            "Decima baseline only runs in auto_only mode")
+                    return DecimaScheduler(
+                        ckpt_path     = ckpt,
+                        num_nodes     = num_nodes,
+                        action_mode   = action_mode,
+                        deterministic = bool(eval_cfg.get("deterministic", True)),
+                        device        = eval_cfg.get("device", "cpu"),
+                    )
+                factories.append(("Decima", decima_factory))
+                print(f"[evaluate] Using LEGACY Decima (masked features) "
+                      f"— set eval.decima_fair_ckpt to use fair version")
+            except ImportError as e:
+                print(f"[evaluate] DecimaScheduler unavailable: {e}")
 
     # Trained PPO — three variants (auto_only / agent_only / hybrid),
     # all using the same checkpoint.  ``action_mode`` is honoured by
@@ -122,10 +194,11 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
         for ours_mode in eval_cfg.get("action_mode_list",
                                        ["auto_only", "agent_only", "hybrid"]):
             label = f"Ours-{ours_mode}"
+            if not _included(label):
+                continue
 
             def make_ours_factory(_mode=ours_mode, _label=label):
                 def _f(num_nodes: int, action_mode: str):
-                    # Only build this scheduler if env's action_mode matches
                     if action_mode != _mode:
                         raise ValueError(
                             f"{_label} only runs at action_mode={_mode}"
