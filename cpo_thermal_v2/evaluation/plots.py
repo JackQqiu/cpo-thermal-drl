@@ -47,15 +47,28 @@ def _set_paper_style() -> None:
     })
 
 
-# Distinct colours that print well in greyscale
+# Paper-matched palette: cool blues for classical, warm reds for thermally-aware
 _PALETTE = {
-    "RoundRobin":      "#888888",
-    "HEFT":            "#1f77b4",
-    "ThermalHEFT":     "#ff7f0e",
-    "Decima":          "#2ca02c",
-    "Ours-auto_only":  "#9467bd",
-    "Ours-agent_only": "#e377c2",
-    "Ours-hybrid":     "#d62728",
+    # Classical heuristics — cool blues / gray
+    "RoundRobin":                "#9CB4D8",     # light steel blue (was #888888 mid-gray)
+    "HEFT":                      "#6789A8",     # mid steel blue (was #1f77b4 tab:blue)
+    "ThermalHEFT":               "#3E5778",     # dark steel blue (was #ff7f0e tab:orange)
+    "Thermal-HEFT":              "#3E5778",     # alternative label spelling alias
+
+    # Throttled-HEFT (HK-2.1 new) — distinct steel blue family member
+    "Throttled-HEFT-hybrid":     "#5A7090",
+    "Throttled-HEFT-agent_only": "#7A8DA8",
+
+    # Ours family — warm gold / red / burgundy gradient
+    "Ours-NoThermal":            "#D4A24C",     # warm gold (matches paper figure)
+    "Ours-auto_only":            "#C76B5A",     # coral red
+    "Ours-auto":                 "#C76B5A",     # paper figure label alias
+    "Ours-agent_only":           "#A04A5C",     # mid burgundy
+    "Ours-hybrid":               "#7A2E3B",     # deep burgundy (matches paper)
+
+    # Future Stage 2/3 baselines (placeholders, distinct hue families)
+    "Decima-true":               "#5C8A3A",     # forest green (Stage 2 future)
+    "HGATE-PPO":                 "#8A5C3A",     # warm brown (Stage 3 future)
 }
 
 
