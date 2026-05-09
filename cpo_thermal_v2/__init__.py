@@ -83,8 +83,8 @@ try:
     ]
     # Trained-model baselines depend on torch — soft-import them
     try:
-        from .baselines import DecimaScheduler, TrainedPPOScheduler
-        __all__ += ["DecimaScheduler", "TrainedPPOScheduler"]
+        from .baselines import TrainedPPOScheduler
+        __all__ += ["TrainedPPOScheduler"]
     except ImportError:
         pass
 except ImportError:                            # pragma: no cover

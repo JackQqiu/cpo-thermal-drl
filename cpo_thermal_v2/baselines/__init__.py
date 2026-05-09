@@ -11,9 +11,6 @@ Public exports
     RoundRobinScheduler   — sanity-check baseline
     HEFTScheduler         — classic Heterogeneous Earliest Finish Time
     ThermalHEFTScheduler  — PROCHOT-aware HEFT (heat penalty in cost)
-    DecimaScheduler       — legacy Decima (uses Ours ckpt with thermal
-                            features masked at inference; has fairness
-                            caveat documented in baselines/decima.py)
     DecimaFairScheduler   — fair Decima (separately trained, never
                             sees thermal features)
     TrainedPPOScheduler   — wraps a saved PPOActorCritic checkpoint
@@ -34,10 +31,8 @@ __all__ = [
 
 # torch-required schedulers (soft import)
 try:
-    from .decima       import DecimaScheduler
     from .decima_fair  import DecimaFairScheduler
     from .trained_ppo  import TrainedPPOScheduler
-    __all__ += ["DecimaScheduler", "DecimaFairScheduler",
-                "TrainedPPOScheduler"]
+    __all__ += ["DecimaFairScheduler", "TrainedPPOScheduler"]
 except ImportError:
     pass

@@ -165,25 +165,10 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
             except ImportError as e:
                 print(f"[evaluate] DecimaFairScheduler unavailable: {e}")
         else:
-            try:
-                from cpo_thermal_v2.baselines import DecimaScheduler
-
-                def decima_factory(num_nodes: int, action_mode: str):
-                    if action_mode != "auto_only":
-                        raise ValueError(
-                            "Decima baseline only runs in auto_only mode")
-                    return DecimaScheduler(
-                        ckpt_path     = ckpt,
-                        num_nodes     = num_nodes,
-                        action_mode   = action_mode,
-                        deterministic = bool(eval_cfg.get("deterministic", True)),
-                        device        = eval_cfg.get("device", "cpu"),
-                    )
-                factories.append(("Decima", decima_factory))
-                print(f"[evaluate] Using LEGACY Decima (masked features) "
-                      f"— set eval.decima_fair_ckpt to use fair version")
-            except ImportError as e:
-                print(f"[evaluate] DecimaScheduler unavailable: {e}")
+            print("[evaluate] WARNING: Decima column skipped — set "
+                  "eval.decima_fair_ckpt to enable. Legacy DecimaScheduler "
+                  "(mask-thermal hack) was removed in HK-2.1.5.")
+            # No factories.append — Decima column simply absent from results
 
     # Trained PPO — three variants (auto_only / agent_only / hybrid),
     # all using the same checkpoint.  ``action_mode`` is honoured by
