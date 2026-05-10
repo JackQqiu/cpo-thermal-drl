@@ -349,6 +349,11 @@ def train(config: Dict[str, Any]) -> None:
         delay_loss_coef = delay_loss_coef,
         device          = device,
         thermal_blind   = thermal_blind,
+        # E4 (HK-1.5.8): warmup the delay-channel loss coefficient over
+        # the first delay_warmup_steps env-steps of hybrid training.
+        # Default 0 = no warmup (pre-HK-1.5.8 behaviour).
+        action_mode        = config["env"]["action_mode"],
+        delay_warmup_steps = int(train_cfg.get("delay_warmup_steps", 0)),
     )
 
     # ---------------- Rollout buffer + reward normaliser ----------------

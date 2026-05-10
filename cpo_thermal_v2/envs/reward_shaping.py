@@ -99,6 +99,10 @@ class RewardConfig:
     # agent_delay_ms is always 0 by construction so this bonus is
     # never earned, meaning Stage 2's hybrid contribution is well
     # differentiated from Stage 1's auto-cool-fallback baseline.
+    #
+    # v2.2: gated on would_violate_without_delay (see
+    # compute_reward_channels for the trigger logic). Magnitude
+    # unchanged.
     anticipation_bonus:   float = 1.5
 
 
@@ -325,7 +329,7 @@ def compute_reward_channels(
         cool_avoid_bonus             |  delay       |   the delay decision averted heat
         cool_waste_pen               |  delay       |   the delay decision wasted time
         agent-under-anticipated -1   |  delay       |   see "Under" section below
-        agent-anticipated +1.5       |  delay       |   NEW v2.1: see "Anticipation" below
+        agent-anticipated +1.5       |  delay       |   v2.1; v2.2 gated, see "Anticipation" below
         dag_done / episode_done      |  split 50/50 |   both heads contributed
         truncate                     |  split 50/50 |   both heads share blame
 
@@ -393,16 +397,26 @@ def compute_reward_channels(
     # forced to 0 there), giving Stage 2's hybrid mode a clean
     # differentiation from Stage 1.
     #
-    # Conditions:
+    # Conditions (v2.2):
     #   - agent inserted some delay (the action was non-trivial)
     #   - env subsequently did NOT need to insert auto-cool (anticipation
     #     was successful — the agent's delay was sufficient)
     #   - max_temp_during stayed below the soft wall (the trajectory
     #     itself was thermally safe — i.e. the delay wasn't merely
     #     redundant in a doomed trajectory)
+    #   - would_violate_without_delay (NEW gate — see below)
+    #
+    # v2.2: Bonus is now gated on `would_violate_without_delay`.
+    # Previously the bonus fired whenever the trajectory was thermally
+    # safe, which made it trivially earnable in warm/hot regimes (where
+    # peak_T saturates well below T_pen even without delay) and
+    # incentivised the agent to fire delay for free. The gate aligns
+    # the bonus shape with cool_avoid_bonus: both now require the env's
+    # lookahead to confirm the delay was necessary.
     if (agent_delay_ms > 0.0
             and env_cooling_ms == 0.0
-            and max_temp_during <= cfg.T_pen):
+            and max_temp_during <= cfg.T_pen
+            and would_violate_without_delay):
         d += float(cfg.anticipation_bonus)
 
     # Phase bonuses: split 50/50 (both heads contributed)
@@ -556,6 +570,10 @@ def _test_channels_consistent_with_total():
     knowing how cooling was split between agent and env), so for
     randomly-sampled inputs that satisfy the bonus condition, we expect
     ch['total'] = r + anticipation_bonus.  We test both branches.
+
+    v2.2 (HK-1.5.8 R-C): anticipation_bonus is now additionally gated
+    on `would_violate_without_delay == True`.  The expected_delta calc
+    below was updated to reflect this.
     """
     rng = np.random.default_rng(2)
     matches      = 0
@@ -577,15 +595,21 @@ def _test_channels_consistent_with_total():
         )
         r = compute_reward(**kwargs_main)
         # Setting agent_delay_ms = cooling_used, env_cooling_ms = 0
-        # suppresses under_anticipate_pen.  If max_T <= T_pen, also
-        # triggers anticipation_bonus.
+        # suppresses under_anticipate_pen.  If max_T <= T_pen AND
+        # would_violate_without_delay (v2.2 R-C gate), also triggers
+        # anticipation_bonus.
         ch = compute_reward_channels(
             agent_delay_ms=cooling,
             env_cooling_ms=0.0,
             **kwargs_main,
         )
-        # Expected delta: anticipation_bonus iff conditions met.
-        expects_bonus = (cooling > 0.0 and max_T <= _DEFAULT_CFG.T_pen)
+        # Expected delta: anticipation_bonus iff ALL conditions met.
+        # R-C (v2.2): bonus also requires would_violate_without_delay=True.
+        expects_bonus = (
+            cooling > 0.0
+            and max_T <= _DEFAULT_CFG.T_pen
+            and kwargs_main.get('would_violate_without_delay', False)
+        )
         expected_delta = _DEFAULT_CFG.anticipation_bonus if expects_bonus else 0.0
         if expects_bonus:
             bonus_cases += 1

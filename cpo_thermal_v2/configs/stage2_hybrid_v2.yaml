@@ -1,0 +1,39 @@
+# =====================================================================
+# stage2_hybrid_v2.yaml — Stage 2 with HK-1.5.8 fixes (R-C + E4)
+# =====================================================================
+# Experimental Stage 2 config exercising both fixes from HK-1.5.8:
+#
+#   R-C (gated anticipation_bonus): the bonus magnitude (1.5) is
+#   unchanged — the FIX is internal to envs/reward_shaping.py
+#   compute_reward_channels(), which now requires
+#   `would_violate_without_delay == True` for the bonus to fire. This
+#   eliminates the warm/hot-regime reward-hacking surface where the
+#   agent earned +1.5 per step for any non-zero delay even when no
+#   thermal violation was actually averted.
+#
+#   E4 (delay_loss_coef linear warmup): training/ppo_trainer.py now
+#   ramps the delay-channel loss coefficient from 0 to its target
+#   value over the first `delay_warmup_steps` env-steps of hybrid
+#   training. Avoids the encoder gradient shock observed in v1 where
+#   the abrupt 0 -> 1 transition pulled the shared encoder toward
+#   delay-supporting representations and degraded the placement head
+#   by +1.26 °C peak_T (p=0.008) in hot regime.
+#
+# Pareto question: does v2 hybrid achieve peak_T < s1-auto in hot
+# regime [60, 75]? v1 had Δ peak_T = +1.24 °C, p=0.049 (wrong sign).
+# A successful v2 run should land Δ <= 0 °C, ideally -0.5 to -1.5 °C.
+#
+# Both fixes ride on top of stage2_hybrid.yaml's other settings
+# (warm-start from Stage 1 best.pt, 1.5M steps, lr=1e-4, curriculum
+# warm -> hot). stage2_hybrid.yaml itself is untouched so v1 stays
+# reproducible from existing configs.
+# =====================================================================
+_inherit: stage2_hybrid
+
+training:
+  delay_warmup_steps: 100000     # E4: 100k env-step linear ramp 0 -> 1.0
+
+logging:
+  run_name:        stage2_hybrid_v2_N17
+  checkpoint_dir:  "checkpoints/stage2_hybrid_v2_N17"
+  tb_log_dir:      "tb_logs/stage2_hybrid_v2_N17"

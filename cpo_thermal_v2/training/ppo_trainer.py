@@ -118,6 +118,8 @@ class PPOTrainer:
         delay_loss_coef: float = 1.0,
         device:          str   = "cpu",
         thermal_blind:   bool  = False,
+        action_mode:     str   = "auto_only",
+        delay_warmup_steps: int = 0,
     ):
         self.model = model
         self.optim = optimizer
@@ -134,6 +136,16 @@ class PPOTrainer:
         self.delay_loss_coef = float(delay_loss_coef)
         self.device          = device
         self.thermal_blind   = bool(thermal_blind)
+        # E4 (HK-1.5.8): linear-warmup of delay_loss_coef during the
+        # first delay_warmup_steps env-steps of hybrid training, to
+        # avoid encoder gradient shock at the Stage 1 -> Stage 2
+        # transition. Only active when action_mode == "hybrid";
+        # auto_only / agent_only ignore the warmup. delay_warmup_steps=0
+        # disables warmup entirely (back to pre-HK-1.5.8 behaviour).
+        self.action_mode        = str(action_mode)
+        self.delay_warmup_steps = int(delay_warmup_steps)
+        self._global_step       = 0
+        self._effective_delay_loss_coef = float(delay_loss_coef)
 
     # =================================================================
     # Top-level update
@@ -150,6 +162,26 @@ class PPOTrainer:
         last state collected (used for GAE tail bootstrap).
         """
         assert buffer.is_full, "PPO update requires a full rollout buffer"
+
+        # ------------ 0. E4 (HK-1.5.8): linear-warmup delay_loss_coef ------------
+        # In hybrid mode the encoder transitions from a Stage-1 backbone
+        # optimised against placement-only objective to one that must
+        # also satisfy delay-head gradients. A linear ramp lets the
+        # representation adapt gradually rather than be yanked at full
+        # delay_loss_coef from step 0.
+        if (self.action_mode == "hybrid"
+                and self._global_step < self.delay_warmup_steps
+                and self.delay_warmup_steps > 0):
+            self._effective_delay_loss_coef = (
+                self.delay_loss_coef
+                * (self._global_step / max(self.delay_warmup_steps, 1))
+            )
+        else:
+            self._effective_delay_loss_coef = self.delay_loss_coef
+        print(f"[trainer] global_step={self._global_step:>9d}  "
+              f"dlc={self._effective_delay_loss_coef:.3f}  "
+              f"(target={self.delay_loss_coef:.2f}, "
+              f"warmup={self.delay_warmup_steps})")
 
         # ------------ 1. Compute GAE for both channels ------------
         adv_p, ret_p = compute_gae(
@@ -222,6 +254,12 @@ class PPOTrainer:
                   "clip_frac_p", "clip_frac_d", "grad_norm"):
             setattr(metrics, k, getattr(metrics, k) / max(1, n_updates))
 
+        # E4 (HK-1.5.8): advance the internal env-step counter so the
+        # next update() applies the correct warmup ramp position. The
+        # buffer's rewards_p tensor has shape (T, N) so .numel() == T*N
+        # equals the total env-steps consumed by this rollout.
+        self._global_step += int(buffer.rewards_p.numel())
+
         return metrics
 
     # =================================================================
@@ -264,7 +302,11 @@ class PPOTrainer:
         loss_value_d = self._value_loss(v_d_new, mb["returns_d"])
 
         # 5. Combine with mode-aware delay coefficient
-        c = self.delay_loss_coef
+        # E4 (HK-1.5.8): use the warmup-ramped effective coefficient
+        # set by update() rather than the raw self.delay_loss_coef.
+        # When warmup is disabled (delay_warmup_steps=0) or finished,
+        # this equals self.delay_loss_coef and behaviour is unchanged.
+        c = self._effective_delay_loss_coef
         loss_actor   = clip_loss_p + c * clip_loss_d
         loss_value   = 0.5 * (loss_value_p + c * loss_value_d)
         loss_entropy = -(entropy_p_new.mean() + c * entropy_d_new.mean())
