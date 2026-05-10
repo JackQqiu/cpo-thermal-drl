@@ -1,0 +1,61 @@
+# =====================================================================
+# stage2_hybrid_v3_stress.yaml  —  HK-1.5.9
+# =====================================================================
+# v3 stress curriculum: pushes training peak_T into the T_pen-trigger
+# zone so R-C-gated anticipation_bonus (HK-1.5.8) can deliver dense
+# delay-channel signal.
+#
+# v2 (HK-1.5.8) fixed reward hacking but over-corrected: agent learned
+# delay_idx=0 always (eval cooling=0/ep, peak_T std=0.36, hybrid
+# numerically equivalent to auto_only).
+# Root cause: in warm + hot training regimes the gate predicate
+# `would_violate_without_delay` rarely fires, so the delay-channel
+# reward landscape is dominated by the negative cooling_time_w cost
+# -> optimal policy is always-zero delay.
+#
+# v3 hypothesis: a stress curriculum that holds training peak_T near
+# T_pen (= 80 °C) causes `would_violate_without_delay` to fire densely,
+# anticipation_bonus delivers signal, and the agent learns selective
+# fire without falling back into reward-hacking territory.
+#
+# Reward / loss / E4 warmup unchanged from HK-1.5.8 — pure curriculum
+# experiment, controlled comparison vs v2.
+#
+# N=33 instead of N=17 stresses heterogeneous coupling matrix density;
+# the larger ring increases ASIC <-> OE cross-coupling and OE <-> OE
+# accumulation, raising baseline thermal pressure for any given DAG.
+# =====================================================================
+_inherit: stage2_hybrid_v2
+
+env:
+  num_nodes:        33                  # was 17
+  dags_per_episode: 50                  # long horizon for stress phase
+
+training:
+  warm_start_path:    "checkpoints/stage1_auto_only_N17/best.pt"
+  warm_start_strict:  false             # N differs -> tolerate missing keys
+  delay_warmup_steps: 100000            # E4 inherited from v2
+  total_steps:        1_500_000
+
+# Curriculum: full replacement of stage2_hybrid's [warm, hot] list (deep
+# merge replaces lists, no concat).  warm shortened, hot pushed into the
+# T_pen approach band, new stress phase starts inside the violation zone.
+curriculum:
+  schedule:
+    - name:               warm
+      until_step:           100_000     # was 400k
+      initial_temp_range: [60.0, 70.0]  # was [40, 65]
+      max_dag_size:       15
+    - name:               hot
+      until_step:           600_000     # was null
+      initial_temp_range: [70.0, 80.0]  # was [60, 75]
+      max_dag_size:       25
+    - name:               stress         # NEW
+      until_step:         null
+      initial_temp_range: [75.0, 82.0]
+      max_dag_size:       null
+
+logging:
+  run_name:        stage2_hybrid_v3_stress_N33
+  checkpoint_dir:  "checkpoints/stage2_hybrid_v3_stress_N33"
+  tb_log_dir:      "tb_logs/stage2_hybrid_v3_stress_N33"
