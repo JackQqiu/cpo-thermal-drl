@@ -1,0 +1,66 @@
+# =====================================================================
+# train_decima_true_vanilla.yaml — Decima (Mao 2019) vanilla variant
+# =====================================================================
+# Variant 1 of 2 (vanilla). Faithful Decima reproduction (Mao 2019)
+# with makespan-only reward, deployed in our thermal-aware env.
+# Expected outcome: Decima will violate frequently because it can see
+# neither thermal state (obs stripped) nor receive thermal pressure
+# from the reward.  This is the demonstrated value of thermal-aware
+# reward shaping (paper §5 ablation row vanilla -> thermal).
+#
+# Ablation cube (paper §5):
+#   | Variant         | Reward    | Algo       | GNN          |
+#   |-----------------|-----------|------------|--------------|
+#   | Decima vanilla  | makespan  | REINFORCE  | Homog GCN    |  <- THIS
+#   | Decima thermal  | thermal   | REINFORCE  | Homog GCN    |
+#   | decima_fair     | thermal   | PPO        | Hetero GAT   |
+#   | Ours            | thermal   | PPO        | Hetero+RC    |
+#
+# Chain reads: vanilla -> thermal isolates reward; thermal -> fair
+# isolates algo+GNN; fair -> Ours isolates RC edge attribute.
+# =====================================================================
+# !!!! BLOCKED — DO NOT SUBMIT YET !!!!
+# Same code-support requirements as the thermal variant.  See:
+#   - baselines/decima_true.py            (NotImplementedError throughout)
+#   - paper_drafts/decima_true_implementation_checklist.md  (10-step plan)
+# =====================================================================
+_inherit: default
+
+training:
+  algorithm:        reinforce
+  baseline_type:    moving_average
+  baseline_window:  50
+  learning_rate:    5.0e-4
+  total_steps:      5_000_000
+
+model:
+  architecture:     decima_true
+  gnn_type:         gcn_homogeneous
+  hidden_dim:       256
+  num_gcn_layers:   4
+
+env:
+  observation_keys: [task_x, edges_t2t]
+
+# Reward — makespan-only (Mao 2019 original). This is the vanilla
+# variant; the agent receives no thermal feedback at all (neither in
+# obs nor in reward).  Pairs with the thermal variant to isolate
+# reward signal as the controlled variable.
+#
+# NOTE: reward_mode lives under the top-level `reward:` section (not
+# under `env:`) because env_factory._build_reward_cfg constructs the
+# RewardConfig from that section via dataclass-field introspection.
+# Putting it under `env:` would cause _make_env_kwargs to silently
+# drop it as an unknown env-ctor kwarg.
+reward:
+  reward_mode:      makespan_only
+
+logging:
+  run_name:         decima_true_vanilla_N17
+  checkpoint_dir:   "checkpoints/decima_true_vanilla_N17"
+  tb_log_dir:       "tb_logs/decima_true_vanilla_N17"
+
+# =====================================================================
+# Runtime guard removed (HK-3.0+): decima_true.py Step 1-6 implemented,
+# env-side reward_mode + observation_keys live, vanilla pilot unblocked.
+# =====================================================================

@@ -1,0 +1,77 @@
+# =====================================================================
+# train_decima_true_thermal.yaml — Decima (Mao 2019) thermal variant
+# =====================================================================
+# Variant 2 of 2 (thermal). Decima true with the SAME reward signal as
+# Ours / decima_fair.  Isolates a single dimension of the §5 ablation
+# chain: REINFORCE + Homogeneous GCN vs PPO + HeteroGNN under
+# controlled reward conditions.  Pair with train_decima_true_vanilla.yaml
+# for the full controlled-comparison cube.
+#
+# Ablation cube (paper §5):
+#   | Variant         | Reward    | Algo       | GNN          |
+#   |-----------------|-----------|------------|--------------|
+#   | Decima vanilla  | makespan  | REINFORCE  | Homog GCN    |
+#   | Decima thermal  | thermal   | REINFORCE  | Homog GCN    |  <- THIS
+#   | decima_fair     | thermal   | PPO        | Hetero GAT   |
+#   | Ours            | thermal   | PPO        | Hetero+RC    |
+#
+# Chain reads: vanilla -> thermal isolates reward; thermal -> fair
+# isolates algo+GNN; fair -> Ours isolates RC edge attribute.
+# =====================================================================
+# !!!! BLOCKED — DO NOT SUBMIT YET !!!!
+# Code support is a STUB.  See:
+#   - baselines/decima_true.py            (NotImplementedError throughout)
+#   - paper_drafts/decima_true_implementation_checklist.md  (10-step plan)
+#
+# This config locks in the hyperparameter intent; the runtime sbatch
+# guard refuses to launch while the `_BLOCKED_DO_NOT_RUN:` line below
+# is still present.
+#
+# Once decima_true.py is implemented and checklist Step 1-7 passes:
+#   1. Wire DecimaTrueAgent into training/train.py's algorithm dispatch
+#      (currently PPO-only)
+#   2. Wire DecimaTruePolicy into models/__init__.py architecture registry
+#   3. Implement env-side `reward_mode` dispatch
+#      ('makespan_only' | 'thermal_aware') — currently absent
+#   4. Implement env-side `observation_keys` filter
+#   5. Remove the `_BLOCKED_DO_NOT_RUN:` line below
+#   6. Resubmit scripts/train_decima_true_thermal.sbatch
+# =====================================================================
+_inherit: default
+
+training:
+  algorithm:        reinforce            # NEW: dispatch in train.py
+  baseline_type:    moving_average       # Mao 2019 §5.1
+  baseline_window:  50                   # episodes
+  learning_rate:    5.0e-4               # Mao 2019 had 1e-3; tune in pilot
+  total_steps:      5_000_000            # match Ours stage 1 budget; REINFORCE is slow
+  # NOTE: warm_start NOT applicable — REINFORCE optimizer / loss are
+  # incompatible with the PPO checkpoints under checkpoints/stage1*.
+
+model:
+  architecture:     decima_true          # NEW: registry lookup
+  gnn_type:         gcn_homogeneous      # torch_geometric.nn.GCNConv stack
+  hidden_dim:       256
+  num_gcn_layers:   4
+
+env:
+  # Observation stripping — Decima never sees thermal info, even when
+  # the reward signal is thermal-aware. The model is blind to RC state;
+  # only the reward delivers thermal information.
+  observation_keys: [task_x, edges_t2t]
+
+# Reward — thermal-aware (SAME as Ours). This is what makes this the
+# 'thermal' variant.  Lives under the top-level `reward:` section (not
+# under `env:`) — see vanilla yaml for the env_factory rationale.
+reward:
+  reward_mode:      thermal_aware
+
+logging:
+  run_name:         decima_true_thermal_N17
+  checkpoint_dir:   "checkpoints/decima_true_thermal_N17"
+  tb_log_dir:       "tb_logs/decima_true_thermal_N17"
+
+# =====================================================================
+# RUNTIME GUARD — keep until baselines/decima_true.py is implemented
+# =====================================================================
+_BLOCKED_DO_NOT_RUN: "Code support not yet implemented (see yaml header + checklist)."
