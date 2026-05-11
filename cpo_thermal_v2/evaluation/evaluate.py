@@ -220,6 +220,46 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
         factories.append((_dt_name, _named_factory))
         print(f"[evaluate] {_dt_name} registered from {_dt_ckpt}")
 
+    # HGATE-PPO (HK-4.x reproduction of Wu 2025 IEEE IoT Journal).
+    # Hetero GATv2 + standard PPO, NO RC edge attribute (the §5
+    # ablation isolation point between Ours-NoThermal and HGATE-PPO).
+    # auto_only-only — Wu 2025's published variant has no delay head.
+    # Opt-in via eval.hgate_ppo_ckpt; column absent otherwise.
+    if _included("HGATE-PPO"):
+        _hg_ckpt = eval_cfg.get("hgate_ppo_ckpt", None)
+        if not _hg_ckpt:
+            print("[evaluate] HGATE-PPO column skipped — set "
+                  "eval.hgate_ppo_ckpt to enable.")
+        else:
+            try:
+                from cpo_thermal_v2.baselines.hgate_ppo import HGATEPPOScheduler
+            except ImportError as e:                          # pragma: no cover
+                print(f"[evaluate] HGATEPPOScheduler unavailable: {e}")
+            else:
+                # Architecture hyper-params must match training-time
+                # values; pull from eval_cfg with Wu 2025 §4 defaults.
+                _hg_hidden     = int(eval_cfg.get("hgate_hidden_dim",     128))
+                _hg_gat_layers = int(eval_cfg.get("hgate_num_gat_layers",   2))
+                _hg_heads      = int(eval_cfg.get("hgate_num_heads",        4))
+
+                def hgate_factory(num_nodes: int, action_mode: str):
+                    if action_mode != "auto_only":
+                        raise ValueError(
+                            "HGATE-PPO only runs in auto_only mode")
+                    return HGATEPPOScheduler(
+                        ckpt_path      = _hg_ckpt,
+                        num_nodes      = num_nodes,
+                        deterministic  = bool(eval_cfg.get("deterministic", True)),
+                        device         = eval_cfg.get("device", "cpu"),
+                        hidden_dim     = _hg_hidden,
+                        num_gat_layers = _hg_gat_layers,
+                        num_heads      = _hg_heads,
+                    )
+                factories.append(("HGATE-PPO", hgate_factory))
+                print(f"[evaluate] HGATE-PPO registered from {_hg_ckpt} "
+                      f"(hidden={_hg_hidden}, gat_layers={_hg_gat_layers}, "
+                      f"heads={_hg_heads})")
+
     # Trained PPO — three variants (auto_only / agent_only / hybrid),
     # all using the same checkpoint.  ``action_mode`` is honoured by
     # both the env and the model wrapper.

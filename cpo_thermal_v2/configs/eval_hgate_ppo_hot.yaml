@@ -1,0 +1,45 @@
+# =====================================================================
+# eval_hgate_ppo_hot.yaml — HGATE-PPO vs HEFT + Ours-s1, HOT regime
+# =====================================================================
+# Runs the smallest meaningful comparison set for the paper §5 chain
+# isolation point between HGATE-PPO and Ours-NoThermal:
+#
+#   - HEFT             (heuristic anchor)
+#   - HGATE-PPO        (Wu 2025 reproduction, hetero-GAT + standard PPO,
+#                       NO RC edge attribute — the §5 isolation point)
+#
+# s1-auto (Pareto anchor) is lifted from the existing CSV at
+# eval_results/stage2_v2_validation_stage1ckpt_hot/episodes.csv during
+# the compare step.  Same seed_base=100000 paradigm keeps every Stage-2
+# and Decima/HGATE eval paired.
+#
+# Update eval.hgate_ppo_ckpt to point at the actual V100 ckpt once
+# the HK-4.4 pilot finishes.  Current value is the HK-4.4 100-step
+# Mac CPU smoke ckpt — useful only for end-to-end pipeline verification,
+# NOT for paper §5 data.
+# =====================================================================
+_inherit: default
+eval:
+  # Required by evaluate.py for the Ours factory check; Ours is filtered
+  # out via scheduler_filter, so the path resolves but isn't loaded.
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+
+  # HGATE-PPO ckpt opt-in (HK-3.1.4 register)
+  hgate_ppo_ckpt:        "checkpoints/hgate_ppo_N17/best.pt"
+  # Architecture hyper-params must match training (HK-4.4 defaults)
+  hgate_hidden_dim:       128
+  hgate_num_gat_layers:     2
+  hgate_num_heads:          4
+
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired with s1-auto + Stage 2 + Decima CSVs
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter: [HEFT, "HGATE-PPO"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/hgate_ppo_validation_hot"
