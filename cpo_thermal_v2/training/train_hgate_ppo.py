@@ -65,6 +65,15 @@ except ImportError:                                     # pragma: no cover
     _TB_AVAILABLE = False
 
 
+# HK-4.5.3: optional per-phase timing diagnostic.  When the env var
+# ``HGATE_PROFILE=1`` is set, _collect_rollout and _ppo_update accumulate
+# wall-clock for each major phase and the trainer prints a breakdown in
+# the heartbeat line.  Use on V100 to identify the actual bottleneck —
+# without this, GPU util % alone can't tell you whether time is going to
+# env IPC, host→device transfers, or the encoder forward itself.
+_HGATE_PROFILE = bool(int(os.environ.get("HGATE_PROFILE", "0")))
+
+
 # =====================================================================
 # Helpers
 # =====================================================================
@@ -175,6 +184,7 @@ def _collect_rollout(
     total_steps:            int,
     episode_returns_buffer: np.ndarray,
     ep_returns_out:         List[float],
+    profile:                Optional[Dict[str, float]] = None,
 ) -> Tuple[RolloutBatch, Dict[str, Any], int]:
     """Collect rollout_length env-steps across num_envs parallel envs.
 
@@ -206,12 +216,16 @@ def _collect_rollout(
     model.eval()
     with torch.no_grad():
         for _t in range(rollout_length):
+            if profile is not None:
+                _t0 = time.perf_counter()
             # HK-4.5.2: ONE batched forward across all N envs per step.
             batched = model.act_batched(
                 graph_obs_list, action_masks, deterministic=False)
             actions_arr = batched["actions"].detach().cpu().numpy().astype(np.int64)
             log_probs_t = batched["log_probs"].detach()         # (N,) tensor
             values_t    = batched["values"   ].detach().cpu().numpy().astype(np.float32)
+            if profile is not None:
+                profile["model_act_s"] += time.perf_counter() - _t0
 
             # snapshot PRE-step state (the (s_t, a_t) the model just acted on)
             roll_graph_obs.append(graph_obs_list)
@@ -220,7 +234,11 @@ def _collect_rollout(
             roll_log_probs.append(log_probs_t)
             roll_values   .append(values_t)
 
+            if profile is not None:
+                _t0 = time.perf_counter()
             _obs, rewards_arr, term, trunc, info = vec_env.step(actions_arr)
+            if profile is not None:
+                profile["env_step_s"] += time.perf_counter() - _t0
             rewards_arr = np.asarray(rewards_arr, dtype=np.float32).reshape(-1)
             term  = np.asarray(term ).reshape(-1).astype(bool)
             trunc = np.asarray(trunc).reshape(-1).astype(bool)
@@ -236,8 +254,12 @@ def _collect_rollout(
                     episode_returns_buffer[n] = 0.0
 
             global_step += num_envs
+            if profile is not None:
+                _t0 = time.perf_counter()
             graph_obs_list = _extract_graph_obs_list(info, num_envs)
             action_masks   = _extract_action_masks  (info, num_envs)
+            if profile is not None:
+                profile["info_extract_s"] += time.perf_counter() - _t0
 
             if global_step >= total_steps:
                 break
@@ -512,9 +534,20 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
     _obs, info   = vec_env.reset(seed=seed_base)
     episode_returns_buffer = np.zeros(num_envs, dtype=np.float64)
 
+    if _HGATE_PROFILE:
+        print("[train_hgate_ppo] HGATE_PROFILE=1 — per-phase timing enabled "
+              "(rollout: model_act / env_step / info_extract; "
+              "update: ppo_update_total)")
+
     # ----- main loop: collect rollout -> PPO update -> repeat -----
     while global_step < total_steps:
         ep_returns_collected: List[float] = []
+
+        profile: Optional[Dict[str, float]] = None
+        if _HGATE_PROFILE:
+            profile = {"model_act_s": 0.0, "env_step_s": 0.0,
+                        "info_extract_s": 0.0}
+            _t_roll_start = time.perf_counter()
 
         rollout, info, global_step = _collect_rollout(
             model=model,
@@ -529,8 +562,13 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
             total_steps=total_steps,
             episode_returns_buffer=episode_returns_buffer,
             ep_returns_out=ep_returns_collected,
+            profile=profile,
         )
         episode_idx += len(ep_returns_collected)
+
+        if _HGATE_PROFILE:
+            _rollout_total_s = time.perf_counter() - _t_roll_start
+            _t_upd_start = time.perf_counter()
 
         metrics = _ppo_update(
             model=model,
@@ -544,6 +582,9 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
             max_grad_norm=max_grad_norm,
             device=device,
         )
+
+        if _HGATE_PROFILE:
+            _update_total_s = time.perf_counter() - _t_upd_start
 
         # ----- logging -----
         if writer is not None:
@@ -571,6 +612,28 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
               f"KL={metrics['approx_kl']:6.4f}  "
               f"clipfrac={metrics['clip_frac']:5.3f}  "
               f"{sps:6.0f} step/s  elapsed={elapsed/60:5.1f}min")
+        if _HGATE_PROFILE and profile is not None:
+            # Per-rollout breakdown.  Shows where the time really went:
+            # if env_step% dominates, fix is in env/IPC, not in the
+            # model.  If info_extract% is large, the per-step graph_obs
+            # marshaling is the bottleneck.  ppo_update% includes both
+            # backward+optim.step and the minibatch-side encoder fwds.
+            _other_roll_s = max(0.0, _rollout_total_s - (
+                profile["model_act_s"] + profile["env_step_s"]
+                + profile["info_extract_s"]))
+            _phase_total = _rollout_total_s + _update_total_s
+            def _pct(x):
+                return (100.0 * x / _phase_total) if _phase_total > 0 else 0.0
+            print(f"  [profile] rollout={_rollout_total_s*1000:7.0f}ms "
+                  f"(model_act={profile['model_act_s']*1000:5.0f}ms / "
+                  f"{_pct(profile['model_act_s']):4.1f}%, "
+                  f"env_step={profile['env_step_s']*1000:5.0f}ms / "
+                  f"{_pct(profile['env_step_s']):4.1f}%, "
+                  f"info_extract={profile['info_extract_s']*1000:5.0f}ms / "
+                  f"{_pct(profile['info_extract_s']):4.1f}%, "
+                  f"other={_other_roll_s*1000:4.0f}ms)  "
+                  f"update={_update_total_s*1000:6.0f}ms / "
+                  f"{_pct(_update_total_s):4.1f}%")
 
         # ----- checkpointing -----
         if ep_returns_collected:

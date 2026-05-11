@@ -444,72 +444,116 @@ class HGATEActorCritic(nn.Module):
         config).  Task counts ``T_i`` are allowed to vary; ``batch_t``
         tracks per-task graph membership for the per-graph mean pool.
 
+        HK-4.5.3 hot-path optimisation
+        ------------------------------
+        Previous impl called ``encoder._graph_obs_to_hetero(go, device)``
+        per graph in a for-loop, which materialised ~5 small CUDA
+        tensors per graph via ``torch.from_numpy(...).to(device)``.
+        At num_envs=16 + minibatch=64, that was ~80 small host→device
+        copies per env-step and ~320 per minibatch update — each costs
+        10-50 μs of kernel-launch overhead on V100, dominating wallclock.
+
+        New impl does ALL concat + offset arithmetic on CPU via numpy,
+        then performs exactly SIX host→device transfers per call (one
+        per output tensor type).  Bit-identical to the old path —
+        guarded by the Step-5 bit-identical unit tests.
+
         Returns
         -------
-        task_x_b      : (sum_T_i, task_in_dim)
-        proc_x_b      : (N*P,    proc_in_dim)
-        edge_t2t_b    : (2, sum_E_t2t) — task indices already offset
-        edge_t2p_b    : (2, sum_E_t2p) — row 0 task-offset, row 1 proc-offset
-        edge_t2p_attr : (sum_E_t2p, 1)
-        batch_t       : (sum_T_i,) — per-task graph index in [0, N)
+        task_x_b      : (sum_T_i, task_in_dim)   float32
+        proc_x_b      : (N*P,    proc_in_dim)    float32
+        edge_t2t_b    : (2, sum_E_t2t)           int64 — task indices already offset
+        edge_t2p_b    : (2, sum_E_t2p)           int64 — task/proc both offset
+        edge_t2p_attr : (sum_E_t2p, 1)           float32
+        batch_t       : (sum_T_i,)               int64 — per-task graph idx in [0, N)
         """
-        task_xs:        List[torch.Tensor] = []
-        proc_xs:        List[torch.Tensor] = []
-        edge_t2ts:      List[torch.Tensor] = []
-        edge_t2ps:      List[torch.Tensor] = []
-        edge_t2p_attrs: List[torch.Tensor] = []
-        batch_t_list:   List[torch.Tensor] = []
+        task_in_dim = self.encoder.task_in_dim
+        proc_in_dim = self.encoder.proc_in_dim
+
+        task_x_segs:        List[np.ndarray] = []
+        proc_x_segs:        List[np.ndarray] = []
+        edge_t2t_segs:      List[np.ndarray] = []
+        edge_t2p_segs:      List[np.ndarray] = []
+        edge_t2p_attr_segs: List[np.ndarray] = []
+        batch_t_segs:       List[np.ndarray] = []
 
         task_offset = 0
-        P_ref:       int = -1
+        P_ref: int = -1
         for i, go in enumerate(graph_obs_list):
-            tx, px, et2t, et2p, et2p_attr = \
-                self.encoder._graph_obs_to_hetero(go, device)
-            T_i = int(tx.shape[0])
-            P_i = int(px.shape[0])
+            # ----- task_x (variable T_i) -----
+            task_x_raw = np.asarray(go.get("task_x", []), dtype=np.float32)
+            if task_x_raw.size == 0 or task_x_raw.ndim != 2:
+                task_x_seg = np.zeros((0, task_in_dim), dtype=np.float32)
+            else:
+                task_x_seg = task_x_raw
+            T_i = int(task_x_seg.shape[0])
+            task_x_segs.append(task_x_seg)
+
+            # ----- proc_x (uniform P across batch) -----
+            proc_x_raw = np.asarray(go.get("proc_x", []), dtype=np.float32)
+            if proc_x_raw.size == 0 or proc_x_raw.ndim != 2:
+                proc_x_seg = np.zeros((0, proc_in_dim), dtype=np.float32)
+            else:
+                proc_x_seg = proc_x_raw
+            P_i = int(proc_x_seg.shape[0])
             if P_ref < 0:
                 P_ref = P_i
             elif P_i != P_ref:
                 raise RuntimeError(
                     f"_merge_graph_obs: graph {i} has {P_i} procs but graph 0 "
-                    f"has {P_ref}.  Batched forward requires uniform proc count."
-                )
+                    f"has {P_ref}.  Batched forward requires uniform proc count.")
+            proc_x_segs.append(proc_x_seg)
             proc_offset = i * P_ref
 
-            task_xs.append(tx)
-            proc_xs.append(px)
-            if et2t.numel() > 0:
-                edge_t2ts.append(et2t + task_offset)
-            if et2p.numel() > 0:
-                # row 0 = task source (offset by cumulative task count);
-                # row 1 = proc dest  (offset by i * P)
-                offset = torch.stack([
-                    torch.full((et2p.shape[1],), task_offset,
-                                dtype=torch.long, device=device),
-                    torch.full((et2p.shape[1],), proc_offset,
-                                dtype=torch.long, device=device),
-                ])
-                edge_t2ps.append(et2p + offset)
-                edge_t2p_attrs.append(et2p_attr)
-            batch_t_list.append(torch.full(
-                (T_i,), i, dtype=torch.long, device=device))
+            # ----- edges_t2t (DAG precedence) -----
+            t2t_raw = go.get("edges_t2t", []) or []
+            if t2t_raw:
+                t2t_np = np.asarray(t2t_raw, dtype=np.int64).T   # (2, E)
+                t2t_np = t2t_np + task_offset
+                edge_t2t_segs.append(t2t_np)
+
+            # ----- edges_t2p + edges_t2p_attr (keep est_time only) -----
+            t2p_raw = go.get("edges_t2p", []) or []
+            if t2p_raw:
+                t2p_np = np.asarray(t2p_raw, dtype=np.int64).T   # (2, E)
+                t2p_np = t2p_np + np.array(
+                    [[task_offset], [proc_offset]], dtype=np.int64)
+                edge_t2p_segs.append(t2p_np)
+
+                attr_raw = go.get("edges_t2p_attr", []) or []
+                attr_np = np.asarray(attr_raw, dtype=np.float32)
+                if attr_np.ndim == 2 and attr_np.shape[1] >= 1:
+                    # Keep est_time only (col 0); drop est_temp_rise (col 1).
+                    # This is the §5 ablation isolation point with Ours.
+                    edge_t2p_attr_segs.append(attr_np[:, 0:1].copy())
+                else:
+                    edge_t2p_attr_segs.append(
+                        np.zeros((t2p_np.shape[1], 1), dtype=np.float32))
+
+            batch_t_segs.append(np.full((T_i,), i, dtype=np.int64))
             task_offset += T_i
 
-        task_x_b = (torch.cat(task_xs, dim=0) if task_xs
-                     else torch.zeros((0, self.encoder.task_in_dim),
-                                       dtype=torch.float32, device=device))
-        proc_x_b = (torch.cat(proc_xs, dim=0) if proc_xs
-                     else torch.zeros((0, self.encoder.proc_in_dim),
-                                       dtype=torch.float32, device=device))
-        edge_t2t_b = (torch.cat(edge_t2ts, dim=1) if edge_t2ts
-                       else torch.zeros((2, 0), dtype=torch.long, device=device))
-        edge_t2p_b = (torch.cat(edge_t2ps, dim=1) if edge_t2ps
-                       else torch.zeros((2, 0), dtype=torch.long, device=device))
-        edge_t2p_attr_b = (torch.cat(edge_t2p_attrs, dim=0) if edge_t2p_attrs
-                            else torch.zeros((0, 1), dtype=torch.float32,
-                                              device=device))
-        batch_t = (torch.cat(batch_t_list, dim=0) if batch_t_list
-                    else torch.zeros((0,), dtype=torch.long, device=device))
+        # ----- CPU concat (cheap, numpy contiguous) -----
+        def _cat(segs, empty_shape, dtype, axis=0):
+            if segs:
+                return np.concatenate(segs, axis=axis)
+            return np.zeros(empty_shape, dtype=dtype)
+
+        task_x_cat        = _cat(task_x_segs,       (0, task_in_dim), np.float32, axis=0)
+        proc_x_cat        = _cat(proc_x_segs,       (0, proc_in_dim), np.float32, axis=0)
+        edge_t2t_cat      = _cat(edge_t2t_segs,     (2, 0),           np.int64,   axis=1)
+        edge_t2p_cat      = _cat(edge_t2p_segs,     (2, 0),           np.int64,   axis=1)
+        edge_t2p_attr_cat = _cat(edge_t2p_attr_segs,(0, 1),           np.float32, axis=0)
+        batch_t_cat       = _cat(batch_t_segs,      (0,),             np.int64,   axis=0)
+
+        # ----- SIX host→device transfers (was ~5*N before) -----
+        task_x_b        = torch.from_numpy(task_x_cat       ).to(device, non_blocking=True)
+        proc_x_b        = torch.from_numpy(proc_x_cat       ).to(device, non_blocking=True)
+        edge_t2t_b      = torch.from_numpy(edge_t2t_cat     ).to(device, non_blocking=True)
+        edge_t2p_b      = torch.from_numpy(edge_t2p_cat     ).to(device, non_blocking=True)
+        edge_t2p_attr_b = torch.from_numpy(edge_t2p_attr_cat).to(device, non_blocking=True)
+        batch_t         = torch.from_numpy(batch_t_cat      ).to(device, non_blocking=True)
+
         return (task_x_b, proc_x_b, edge_t2t_b, edge_t2p_b,
                 edge_t2p_attr_b, batch_t)
 
