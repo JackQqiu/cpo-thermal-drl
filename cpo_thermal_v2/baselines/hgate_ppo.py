@@ -130,14 +130,35 @@ class HGATEEncoder(nn.Module):
         device = next(self.parameters()).device
         task_x, proc_x, edge_t2t, edge_t2p, edge_t2p_attr = \
             self._graph_obs_to_hetero(graph_obs, device)
+        return self._forward_from_tensors(
+            task_x, proc_x, edge_t2t, edge_t2p, edge_t2p_attr)
 
+    def _forward_from_tensors(
+        self,
+        task_x:        torch.Tensor,
+        proc_x:        torch.Tensor,
+        edge_t2t:      torch.Tensor,
+        edge_t2p:      torch.Tensor,
+        edge_t2p_attr: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Stateless encoder forward over pre-merged tensors.
+
+        Used by both single-graph ``forward()`` and the batched path in
+        ``HGATEActorCritic.forward_batched``.  Keeping the message-passing
+        logic in one place guarantees the two callers stay semantically
+        identical (single-graph ⇄ N-graph merged) so the bit-identical
+        unit tests catch any future drift.
+        """
         h_task = self.task_proj(task_x)        # (T, H)
         h_proc = self.proc_proj(proc_x)        # (P, H)
 
         for i in range(self.num_layers):
             # task <- task (DAG precedence); self-loops cover isolated nodes
             h_task_new = self.t2t_convs[i](h_task, edge_t2t)
-            # proc <- task (sched affinity) with est_time edge_attr
+            # proc <- task (sched affinity) with est_time edge_attr.
+            # Source (h_task) is intentionally the PRE-update embedding —
+            # update order matches the in-paper formulation; do not
+            # swap to h_task_new without re-running bit-identical tests.
             h_proc_new = self.t2p_convs[i](
                 (h_task, h_proc), edge_t2p,
                 edge_attr=edge_t2p_attr,
@@ -395,6 +416,284 @@ class HGATEActorCritic(nn.Module):
             "entropy":  entropy,
             "value":    value,
         }
+
+    # =================================================================
+    # Step 5 (HK-4.5.2) — batched API
+    # =================================================================
+    # The single-graph forward / act / get_value above are kept as-is
+    # for the eval-time scheduler (which sees one graph per env step)
+    # and for the unit tests that established correctness in HK-4.1..3.
+    #
+    # The training loop uses the batched variants below: per env-step
+    # they merge N graph_obs into a single big graph (concatenating
+    # node features with task/proc offsets on edges), run ONE encoder
+    # forward over the merged graph, then split outputs back per graph.
+    # This is the standard PyG batching pattern; the bit-identical
+    # unit tests in test_hgate_ppo.py Step 5 guard against drift.
+    # =================================================================
+    def _merge_graph_obs(
+        self,
+        graph_obs_list: List[Dict[str, Any]],
+        device:         torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor,
+                torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Merge N graph_obs into one big hetero-graph.
+
+        Assumes ``proc_x`` has the same row count ``P`` across all N
+        graphs (true for CPOThermalDAGEnvV2 — num_procs is a fixed env
+        config).  Task counts ``T_i`` are allowed to vary; ``batch_t``
+        tracks per-task graph membership for the per-graph mean pool.
+
+        Returns
+        -------
+        task_x_b      : (sum_T_i, task_in_dim)
+        proc_x_b      : (N*P,    proc_in_dim)
+        edge_t2t_b    : (2, sum_E_t2t) — task indices already offset
+        edge_t2p_b    : (2, sum_E_t2p) — row 0 task-offset, row 1 proc-offset
+        edge_t2p_attr : (sum_E_t2p, 1)
+        batch_t       : (sum_T_i,) — per-task graph index in [0, N)
+        """
+        task_xs:        List[torch.Tensor] = []
+        proc_xs:        List[torch.Tensor] = []
+        edge_t2ts:      List[torch.Tensor] = []
+        edge_t2ps:      List[torch.Tensor] = []
+        edge_t2p_attrs: List[torch.Tensor] = []
+        batch_t_list:   List[torch.Tensor] = []
+
+        task_offset = 0
+        P_ref:       int = -1
+        for i, go in enumerate(graph_obs_list):
+            tx, px, et2t, et2p, et2p_attr = \
+                self.encoder._graph_obs_to_hetero(go, device)
+            T_i = int(tx.shape[0])
+            P_i = int(px.shape[0])
+            if P_ref < 0:
+                P_ref = P_i
+            elif P_i != P_ref:
+                raise RuntimeError(
+                    f"_merge_graph_obs: graph {i} has {P_i} procs but graph 0 "
+                    f"has {P_ref}.  Batched forward requires uniform proc count."
+                )
+            proc_offset = i * P_ref
+
+            task_xs.append(tx)
+            proc_xs.append(px)
+            if et2t.numel() > 0:
+                edge_t2ts.append(et2t + task_offset)
+            if et2p.numel() > 0:
+                # row 0 = task source (offset by cumulative task count);
+                # row 1 = proc dest  (offset by i * P)
+                offset = torch.stack([
+                    torch.full((et2p.shape[1],), task_offset,
+                                dtype=torch.long, device=device),
+                    torch.full((et2p.shape[1],), proc_offset,
+                                dtype=torch.long, device=device),
+                ])
+                edge_t2ps.append(et2p + offset)
+                edge_t2p_attrs.append(et2p_attr)
+            batch_t_list.append(torch.full(
+                (T_i,), i, dtype=torch.long, device=device))
+            task_offset += T_i
+
+        task_x_b = (torch.cat(task_xs, dim=0) if task_xs
+                     else torch.zeros((0, self.encoder.task_in_dim),
+                                       dtype=torch.float32, device=device))
+        proc_x_b = (torch.cat(proc_xs, dim=0) if proc_xs
+                     else torch.zeros((0, self.encoder.proc_in_dim),
+                                       dtype=torch.float32, device=device))
+        edge_t2t_b = (torch.cat(edge_t2ts, dim=1) if edge_t2ts
+                       else torch.zeros((2, 0), dtype=torch.long, device=device))
+        edge_t2p_b = (torch.cat(edge_t2ps, dim=1) if edge_t2ps
+                       else torch.zeros((2, 0), dtype=torch.long, device=device))
+        edge_t2p_attr_b = (torch.cat(edge_t2p_attrs, dim=0) if edge_t2p_attrs
+                            else torch.zeros((0, 1), dtype=torch.float32,
+                                              device=device))
+        batch_t = (torch.cat(batch_t_list, dim=0) if batch_t_list
+                    else torch.zeros((0,), dtype=torch.long, device=device))
+        return (task_x_b, proc_x_b, edge_t2t_b, edge_t2p_b,
+                edge_t2p_attr_b, batch_t)
+
+    def forward_batched(
+        self,
+        graph_obs_list: List[Dict[str, Any]],
+    ) -> Dict[str, torch.Tensor]:
+        """Run the encoder + actor scorer + critic over N graphs in one pass.
+
+        Returns
+        -------
+        dict::
+            {
+                'logits':  (N, P) — per-proc unmasked scores per graph,
+                'values':  (N,)   — scalar V(s) per graph.
+            }
+
+        Bit-identical to N sequential ``forward()`` calls (within float32
+        reduction-order noise ≤ 1e-5).  Guarded by Step-5 unit tests.
+        """
+        device = next(self.parameters()).device
+        N = len(graph_obs_list)
+        if N == 0:
+            return {
+                "logits": torch.zeros((0, self.num_procs), device=device),
+                "values": torch.zeros((0,),                device=device),
+            }
+        H = self.hidden_dim
+
+        task_x_b, proc_x_b, edge_t2t_b, edge_t2p_b, edge_t2p_attr_b, batch_t = \
+            self._merge_graph_obs(graph_obs_list, device)
+
+        h_task, h_proc = self.encoder._forward_from_tensors(
+            task_x_b, proc_x_b, edge_t2t_b, edge_t2p_b, edge_t2p_attr_b,
+        )
+
+        # P is uniform across graphs (validated in _merge_graph_obs).
+        # If the env emitted zero procs (shouldn't happen but be safe)
+        # we degrade to per-graph zero-logits.
+        total_P = int(proc_x_b.shape[0])
+        P = total_P // N if N > 0 else 0
+
+        # ----- per-graph global context = mean of (task ∪ proc) embeddings
+        # of that graph.  Implemented via two index_add_ reductions to
+        # match the single-graph ``forward()`` mean-pool semantics.
+        global_ctx = torch.zeros((N, H), device=device)
+        counts     = torch.zeros((N,),  device=device)
+        if h_task.shape[0] > 0:
+            global_ctx.index_add_(0, batch_t, h_task)
+            counts    .index_add_(0, batch_t,
+                                   torch.ones_like(batch_t, dtype=torch.float32))
+        if total_P > 0:
+            # batch_p is sequential: 0,0,..,0 (P times), 1,1,..,1, ..., N-1
+            batch_p = torch.arange(N, device=device).repeat_interleave(P)
+            global_ctx.index_add_(0, batch_p, h_proc)
+            counts    .index_add_(0, batch_p,
+                                   torch.ones_like(batch_p, dtype=torch.float32))
+        counts = counts.clamp(min=1.0).unsqueeze(-1)   # (N, 1)
+        global_ctx = global_ctx / counts                # (N, H)
+
+        # ----- per-pair scoring: (N, P, 2H) -> (N, P) via one Linear stack
+        if P == 0:
+            logits = torch.zeros((N, self.num_procs), device=device)
+        else:
+            ctx_expanded = global_ctx.unsqueeze(1).expand(-1, P, -1)   # (N, P, H)
+            h_proc_grouped = h_proc.view(N, P, H)
+            pair_input = torch.cat([ctx_expanded, h_proc_grouped], dim=-1)
+            logits = self.actor_score(
+                pair_input.view(N * P, 2 * H)).view(N, P)
+
+        # ----- critic
+        values = self.critic(global_ctx).squeeze(-1)                  # (N,)
+
+        return {"logits": logits, "values": values}
+
+    def act_batched(
+        self,
+        graph_obs_list:   List[Dict[str, Any]],
+        action_mask_list: List[np.ndarray],
+        deterministic:    bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """Batched sampling: takes N graphs + N masks, returns stacked
+        action / log_prob / entropy / value tensors.
+
+        For ``deterministic=True`` the output is bit-identical to N
+        sequential ``act()`` calls.  For ``deterministic=False`` only
+        the masking contract is guaranteed (no semantically-equivalent
+        single-RNG path exists).
+        """
+        out = self.forward_batched(graph_obs_list)
+        logits = out["logits"]                       # (N, P)
+        values = out["values"]                       # (N,)
+        device = logits.device
+        N, P   = int(logits.shape[0]), int(logits.shape[1])
+
+        mask_np = np.stack(
+            [np.asarray(m, dtype=bool) for m in action_mask_list], axis=0,
+        )                                            # (N, P)
+        mask_t = torch.as_tensor(mask_np, dtype=torch.bool, device=device)
+        if not mask_t.any(dim=-1).all():
+            bad = (~mask_t.any(dim=-1)).nonzero(as_tuple=False).flatten().tolist()
+            raise RuntimeError(
+                f"act_batched: action_mask is all False for envs {bad} — "
+                f"no valid procs")
+
+        masked_logits = logits.masked_fill(~mask_t, float("-inf"))
+        log_probs_all = F.log_softmax(masked_logits, dim=-1)
+        probs_all     = log_probs_all.exp()
+
+        if deterministic:
+            actions = masked_logits.argmax(dim=-1)              # (N,)
+        else:
+            actions = torch.distributions.Categorical(
+                logits=masked_logits).sample()                  # (N,)
+
+        log_probs = log_probs_all.gather(
+            1, actions.unsqueeze(-1)).squeeze(-1)               # (N,)
+        # Entropy: -sum_p (p * log_p) over VALID positions only.
+        # Masked-out positions have prob 0 + log_prob -inf, which yields
+        # 0 * -inf = NaN; suppress via where().
+        zero  = torch.zeros_like(log_probs_all)
+        lp_v  = torch.where(mask_t, log_probs_all, zero)
+        p_v   = torch.where(mask_t, probs_all,     zero)
+        entropies = -(p_v * lp_v).sum(dim=-1)                   # (N,)
+
+        return {
+            "actions":   actions,
+            "log_probs": log_probs,
+            "entropies": entropies,
+            "values":    values,
+        }
+
+    def evaluate_actions_batched(
+        self,
+        graph_obs_list:   List[Dict[str, Any]],
+        action_mask_list: List[np.ndarray],
+        actions:          Any,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Re-evaluate stored actions under the current policy.
+
+        This is the inner loop of the PPO minibatch update — called once
+        per minibatch instead of once per transition.  Returns
+        ``(new_log_probs, entropies, values)`` each of shape ``(B,)``.
+        """
+        out = self.forward_batched(graph_obs_list)
+        logits = out["logits"]
+        values = out["values"]
+        device = logits.device
+        N, P   = int(logits.shape[0]), int(logits.shape[1])
+
+        mask_np = np.stack(
+            [np.asarray(m, dtype=bool) for m in action_mask_list], axis=0,
+        )
+        mask_t = torch.as_tensor(mask_np, dtype=torch.bool, device=device)
+        masked_logits = logits.masked_fill(~mask_t, float("-inf"))
+        log_probs_all = F.log_softmax(masked_logits, dim=-1)
+        probs_all     = log_probs_all.exp()
+
+        if isinstance(actions, torch.Tensor):
+            actions_t = actions.to(device=device, dtype=torch.long)
+        else:
+            actions_t = torch.as_tensor(
+                np.asarray(actions, dtype=np.int64),
+                dtype=torch.long, device=device)
+
+        new_log_probs = log_probs_all.gather(
+            1, actions_t.unsqueeze(-1)).squeeze(-1)             # (N,)
+        zero = torch.zeros_like(log_probs_all)
+        lp_v = torch.where(mask_t, log_probs_all, zero)
+        p_v  = torch.where(mask_t, probs_all,     zero)
+        entropies = -(p_v * lp_v).sum(dim=-1)                   # (N,)
+        return new_log_probs, entropies, values
+
+    def get_value_batched(
+        self,
+        graph_obs_list: List[Dict[str, Any]],
+    ) -> torch.Tensor:
+        """Batched V(s); same encoder + global-pool + critic path as the
+        N-fold sequential ``get_value`` calls but in one forward."""
+        # forward_batched does an extra actor-score forward — for the
+        # bootstrap path (single call after each rollout) this is cheap
+        # relative to the encoder forward, so we accept the small waste
+        # in exchange for keeping a single batched code path.
+        return self.forward_batched(graph_obs_list)["values"]
 
     def get_value(self, graph_obs: Dict[str, Any]) -> torch.Tensor:
         """Return scalar V(s); used for GAE bootstrap by the PPO loop.

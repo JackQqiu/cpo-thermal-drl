@@ -198,7 +198,7 @@ def _collect_rollout(
     roll_graph_obs:    List[List[Dict[str, Any]]] = []
     roll_masks:        List[List[np.ndarray]]     = []
     roll_actions:      List[np.ndarray]           = []
-    roll_log_probs:    List[List[torch.Tensor]]   = []
+    roll_log_probs:    List[torch.Tensor]         = []   # each (N,)
     roll_values:       List[np.ndarray]           = []
     roll_rewards:      List[np.ndarray]           = []
     roll_dones:        List[np.ndarray]           = []
@@ -206,23 +206,19 @@ def _collect_rollout(
     model.eval()
     with torch.no_grad():
         for _t in range(rollout_length):
-            actions_arr = np.zeros(num_envs, dtype=np.int64)
-            log_probs_t: List[torch.Tensor] = []
-            values_t = np.zeros(num_envs, dtype=np.float32)
-            for n in range(num_envs):
-                out = model.act(graph_obs_list[n], action_masks[n],
-                                 deterministic=False)
-                a = out["action"]
-                actions_arr[n] = int(a.item()) if isinstance(a, torch.Tensor) else int(a)
-                log_probs_t.append(out["log_prob"].detach())
-                values_t[n] = float(out["value"].item())
+            # HK-4.5.2: ONE batched forward across all N envs per step.
+            batched = model.act_batched(
+                graph_obs_list, action_masks, deterministic=False)
+            actions_arr = batched["actions"].detach().cpu().numpy().astype(np.int64)
+            log_probs_t = batched["log_probs"].detach()         # (N,) tensor
+            values_t    = batched["values"   ].detach().cpu().numpy().astype(np.float32)
 
             # snapshot PRE-step state (the (s_t, a_t) the model just acted on)
             roll_graph_obs.append(graph_obs_list)
-            roll_masks.append(action_masks)
-            roll_actions.append(actions_arr.copy())
+            roll_masks    .append(action_masks)
+            roll_actions  .append(actions_arr.copy())
             roll_log_probs.append(log_probs_t)
-            roll_values.append(values_t)
+            roll_values   .append(values_t)
 
             _obs, rewards_arr, term, trunc, info = vec_env.step(actions_arr)
             rewards_arr = np.asarray(rewards_arr, dtype=np.float32).reshape(-1)
@@ -246,11 +242,10 @@ def _collect_rollout(
             if global_step >= total_steps:
                 break
 
-        # bootstrap tail values per env (for GAE)
+        # bootstrap tail values per env (for GAE) — one batched call
         T_actual = len(roll_actions)
-        last_values = np.zeros(num_envs, dtype=np.float32)
-        for n in range(num_envs):
-            last_values[n] = float(model.get_value(graph_obs_list[n]).item())
+        last_values = model.get_value_batched(
+            graph_obs_list).detach().cpu().numpy().astype(np.float32)
 
     # ----- per-env GAE -----
     advantages_arr = np.zeros((T_actual, num_envs), dtype=np.float32)
@@ -268,24 +263,18 @@ def _collect_rollout(
             advantages_arr[t, n] = adv_n[t]
             returns_arr   [t, n] = ret_n[t]
 
-    # ----- flatten (T, N) -> M = T*N -----
-    flat_graph_obs:     List[Dict[str, Any]] = []
-    flat_masks:         List[np.ndarray]     = []
-    flat_actions:       List[int]            = []
-    flat_log_probs_old: List[torch.Tensor]   = []
-    flat_advantages:    List[float]          = []
-    flat_returns:       List[float]          = []
+    # ----- flatten (T, N) -> M = T*N in row-major order (t * N + n) -----
+    flat_graph_obs: List[Dict[str, Any]] = []
+    flat_masks:     List[np.ndarray]     = []
     for t in range(T_actual):
         for n in range(num_envs):
             flat_graph_obs.append(roll_graph_obs[t][n])
-            flat_masks.append(roll_masks[t][n])
-            flat_actions.append(int(roll_actions[t][n]))
-            flat_log_probs_old.append(roll_log_probs[t][n])
-            flat_advantages.append(float(advantages_arr[t, n]))
-            flat_returns   .append(float(returns_arr   [t, n]))
+            flat_masks    .append(roll_masks   [t][n])
 
-    adv_t = torch.tensor(flat_advantages, dtype=torch.float32, device=device)
-    ret_t = torch.tensor(flat_returns,    dtype=torch.float32, device=device)
+    flat_actions    = np.stack(roll_actions, axis=0).reshape(-1)             # (T*N,)
+    flat_log_probs  = torch.stack(roll_log_probs, dim=0).reshape(-1).to(device)  # (T*N,)
+    adv_t = torch.from_numpy(advantages_arr).reshape(-1).to(device)          # (T*N,)
+    ret_t = torch.from_numpy(returns_arr   ).reshape(-1).to(device)          # (T*N,)
     # Per-rollout advantage normalisation (standard PPO)
     if adv_t.numel() > 1:
         adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
@@ -293,8 +282,8 @@ def _collect_rollout(
     rollout = RolloutBatch(
         graph_obs     = flat_graph_obs,
         masks         = flat_masks,
-        actions       = np.array(flat_actions, dtype=np.int64),
-        old_log_probs = torch.stack(flat_log_probs_old).to(device),
+        actions       = flat_actions.astype(np.int64),
+        old_log_probs = flat_log_probs,
         advantages    = adv_t,
         returns       = ret_t,
     )
@@ -342,23 +331,16 @@ def _ppo_update(
             mb_end   = (mb_idx + 1) * mb_size if mb_idx < num_minibatches - 1 else M
             mb_indices = perm[mb_start:mb_end]
 
-            mb_new_log_probs: List[torch.Tensor] = []
-            mb_entropies:     List[torch.Tensor] = []
-            mb_values:        List[torch.Tensor] = []
-            for idx in mb_indices:
-                new_lp, ent, v = _evaluate_action(
-                    model,
-                    rollout.graph_obs[int(idx)],
-                    rollout.masks    [int(idx)],
-                    int(rollout.actions[int(idx)]),
-                )
-                mb_new_log_probs.append(new_lp.view(-1))
-                mb_entropies    .append(ent.view(-1))
-                mb_values       .append(v.view(-1))
-
-            new_log_probs = torch.cat(mb_new_log_probs)   # (B,)
-            entropies     = torch.cat(mb_entropies)       # (B,)
-            values        = torch.cat(mb_values)          # (B,)
+            # HK-4.5.2: ONE batched forward over the whole minibatch
+            # instead of a per-transition for-loop.  evaluate_actions_batched
+            # re-runs the encoder + actor + critic across all B transitions
+            # in a single graph-merge.
+            mb_graph_obs = [rollout.graph_obs[int(i)] for i in mb_indices]
+            mb_masks     = [rollout.masks    [int(i)] for i in mb_indices]
+            mb_actions   = rollout.actions[mb_indices]
+            new_log_probs, entropies, values = model.evaluate_actions_batched(
+                mb_graph_obs, mb_masks, mb_actions,
+            )
 
             mb_idx_t = torch.as_tensor(
                 mb_indices, dtype=torch.long, device=rollout_device)

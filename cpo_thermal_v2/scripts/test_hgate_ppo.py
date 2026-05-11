@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from cpo_thermal_v2.baselines.hgate_ppo import (
     HGATEEncoder, HGATEActorCritic, HGATEPPOScheduler,
@@ -604,6 +605,208 @@ def test_step4perf_ppo_update_one_optim_step_per_minibatch() -> None:
 
 
 # =====================================================================
+# Step 5 (HK-4.5.2 batched-forward) — batched API bit-identical contract
+# =====================================================================
+def _make_diverse_obs_list(N: int, num_procs: int, seed: int = 11):
+    """Build N graph_obs with VARIABLE task counts (real env property)
+    and CONSTANT proc count.  This is the worst case for batching — if
+    bit-identical equivalence holds here, it holds for the env."""
+    rng = np.random.default_rng(seed)
+    obs_list = []
+    for i in range(N):
+        T_i = int(rng.integers(3, 9))     # variable task count per graph
+        obs_list.append(_make_dummy_obs(N_task=T_i, N_proc=num_procs))
+    return obs_list
+
+
+def test_step5perf_forward_batched_matches_sequential() -> None:
+    """forward_batched on N graphs must produce (logits, values)
+    bit-identical to N sequential forward() calls.  Tolerance ≤ 1e-5
+    (float32 reduction-order noise allowed but no semantic drift)."""
+    torch.manual_seed(0)
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=2)
+    m.eval()
+    obs_list = _make_diverse_obs_list(N=6, num_procs=5)
+    masks = [np.array([True] * 5, dtype=bool) for _ in obs_list]
+
+    # Sequential reference
+    seq_logits: List[torch.Tensor] = []
+    seq_values: List[torch.Tensor] = []
+    with torch.no_grad():
+        for go, mk in zip(obs_list, masks):
+            lg, vl = m.forward(go, mk)
+            seq_logits.append(lg)
+            seq_values.append(vl.view(-1))
+    seq_logits_t = torch.stack(seq_logits, dim=0)   # (N, P)
+    seq_values_t = torch.cat (seq_values)           # (N,)
+
+    # Batched candidate
+    assert hasattr(m, "forward_batched"), \
+        "HGATEActorCritic must expose forward_batched(graph_obs_list)"
+    with torch.no_grad():
+        out = m.forward_batched(obs_list)
+    assert "logits" in out and "values" in out, \
+        f"forward_batched must return dict with logits, values; got {sorted(out.keys())}"
+    bat_logits = out["logits"]
+    bat_values = out["values"]
+    assert tuple(bat_logits.shape) == (6, 5), \
+        f"forward_batched logits shape = {tuple(bat_logits.shape)}, expected (6, 5)"
+    assert tuple(bat_values.shape) == (6,), \
+        f"forward_batched values shape = {tuple(bat_values.shape)}, expected (6,)"
+
+    diff_logits = (seq_logits_t - bat_logits).abs().max().item()
+    diff_values = (seq_values_t - bat_values).abs().max().item()
+    assert diff_logits < 1e-5, (
+        f"forward_batched logits drift: max |seq - batched| = {diff_logits:.2e}; "
+        f"expected ≤ 1e-5 (encoder semantics must be bit-identical)")
+    assert diff_values < 1e-5, (
+        f"forward_batched values drift: max |seq - batched| = {diff_values:.2e}; "
+        f"expected ≤ 1e-5")
+
+
+def test_step5perf_get_value_batched_matches_sequential() -> None:
+    """get_value_batched on N graphs must match N sequential get_value calls."""
+    torch.manual_seed(1)
+    m = HGATEActorCritic(hidden_dim=24, num_procs=5,
+                          num_heads=2, num_gat_layers=2)
+    m.eval()
+    obs_list = _make_diverse_obs_list(N=5, num_procs=5)
+
+    with torch.no_grad():
+        seq = torch.stack([m.get_value(go).view(-1) for go in obs_list]).view(-1)
+    assert hasattr(m, "get_value_batched"), \
+        "HGATEActorCritic must expose get_value_batched(graph_obs_list)"
+    with torch.no_grad():
+        bat = m.get_value_batched(obs_list)
+    assert tuple(bat.shape) == (5,), \
+        f"get_value_batched shape = {tuple(bat.shape)}, expected (5,)"
+    diff = (seq - bat).abs().max().item()
+    assert diff < 1e-5, f"get_value_batched drift: {diff:.2e}"
+
+
+def test_step5perf_evaluate_actions_batched_matches_sequential() -> None:
+    """evaluate_actions_batched is the function the PPO update uses inside
+    minibatch.  For B stored actions, it must produce (new_log_prob,
+    entropy, value) bit-identical to B sequential forwards."""
+    torch.manual_seed(2)
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=2)
+    m.eval()
+    B = 7
+    obs_list = _make_diverse_obs_list(N=B, num_procs=5)
+    masks = [np.array([True, True, False, True, True], dtype=bool)
+              for _ in obs_list]
+    actions = np.array([1, 0, 3, 4, 1, 0, 3], dtype=np.int64)
+
+    # Sequential reference: re-run forward + masking + log_softmax + gather
+    seq_lp, seq_ent, seq_v = [], [], []
+    with torch.no_grad():
+        for i in range(B):
+            lg, vl = m.forward(obs_list[i], masks[i])
+            mask_t = torch.tensor(masks[i], dtype=torch.bool)
+            masked = lg.masked_fill(~mask_t, float("-inf"))
+            log_probs = F.log_softmax(masked, dim=-1)
+            probs     = log_probs.exp()
+            seq_lp.append(log_probs[int(actions[i])])
+            seq_ent.append(-(probs[mask_t] * log_probs[mask_t]).sum())
+            seq_v .append(vl.view(()))
+    seq_lp_t  = torch.stack(seq_lp )
+    seq_ent_t = torch.stack(seq_ent)
+    seq_v_t   = torch.stack(seq_v  )
+
+    assert hasattr(m, "evaluate_actions_batched"), \
+        "HGATEActorCritic must expose evaluate_actions_batched(...)"
+    with torch.no_grad():
+        bat_lp, bat_ent, bat_v = m.evaluate_actions_batched(
+            obs_list, masks, actions)
+    for name, seq_t, bat_t in [
+        ("new_log_prob", seq_lp_t,  bat_lp ),
+        ("entropy",      seq_ent_t, bat_ent),
+        ("value",        seq_v_t,   bat_v  ),
+    ]:
+        assert tuple(bat_t.shape) == (B,), \
+            f"evaluate_actions_batched {name} shape = {tuple(bat_t.shape)}, expected ({B},)"
+        diff = (seq_t - bat_t).abs().max().item()
+        assert diff < 1e-5, f"evaluate_actions_batched {name} drift: {diff:.2e}"
+
+
+def test_step5perf_act_batched_deterministic_matches_sequential() -> None:
+    """deterministic=True act_batched must match N sequential
+    deterministic act() calls — actions, log_probs, entropies, values
+    all bit-identical."""
+    torch.manual_seed(3)
+    m = HGATEActorCritic(hidden_dim=24, num_procs=7,
+                          num_heads=2, num_gat_layers=1)
+    m.eval()
+    obs_list = _make_diverse_obs_list(N=5, num_procs=7)
+    masks = [
+        np.array([True, True, False, True, True, False, True], dtype=bool)
+        for _ in obs_list
+    ]
+
+    seq_act, seq_lp, seq_ent, seq_v = [], [], [], []
+    with torch.no_grad():
+        for go, mk in zip(obs_list, masks):
+            o = m.act(go, mk, deterministic=True)
+            seq_act.append(int(o["action"]))
+            seq_lp .append(o["log_prob"].view(()))
+            seq_ent.append(o["entropy" ].view(()))
+            seq_v  .append(o["value"   ].view(()))
+    seq_act_t = torch.tensor(seq_act, dtype=torch.long)
+    seq_lp_t  = torch.stack(seq_lp )
+    seq_ent_t = torch.stack(seq_ent)
+    seq_v_t   = torch.stack(seq_v  )
+
+    assert hasattr(m, "act_batched"), \
+        "HGATEActorCritic must expose act_batched(graph_obs_list, masks)"
+    with torch.no_grad():
+        bat = m.act_batched(obs_list, masks, deterministic=True)
+    for k in ("actions", "log_probs", "entropies", "values"):
+        assert k in bat, f"act_batched output missing {k!r}; got {sorted(bat.keys())}"
+    assert tuple(bat["actions"].shape) == (5,), \
+        f"act_batched actions shape wrong: {tuple(bat['actions'].shape)}"
+    # Bit-identical for deterministic path
+    assert torch.equal(bat["actions"], seq_act_t), \
+        f"deterministic actions differ: seq={seq_act_t.tolist()} bat={bat['actions'].tolist()}"
+    for name, seq_t, bat_t in [
+        ("log_probs", seq_lp_t,  bat["log_probs"]),
+        ("entropies", seq_ent_t, bat["entropies"]),
+        ("values",    seq_v_t,   bat["values"   ]),
+    ]:
+        diff = (seq_t - bat_t).abs().max().item()
+        assert diff < 1e-5, f"act_batched {name} drift: {diff:.2e}"
+
+
+def test_step5perf_act_batched_mask_honored_stochastic() -> None:
+    """act_batched with deterministic=False must respect masks across
+    all envs in the batch (no leakage of masked-out actions)."""
+    torch.manual_seed(4)
+    m = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    m.eval()
+    N = 8
+    obs_list = _make_diverse_obs_list(N=N, num_procs=5)
+    # Different mask per env
+    masks = []
+    for i in range(N):
+        mk = np.array([False, True, True, False, True], dtype=bool)
+        if i % 2 == 1:
+            mk = np.array([True, False, True, True, False], dtype=bool)
+        masks.append(mk)
+    valid_sets = [set(np.where(mk)[0].tolist()) for mk in masks]
+
+    with torch.no_grad():
+        for _ in range(200):
+            out = m.act_batched(obs_list, masks, deterministic=False)
+            acts = out["actions"].cpu().numpy().tolist()
+            for n, a in enumerate(acts):
+                assert int(a) in valid_sets[n], (
+                    f"env {n} sampled invalid action {a} not in {valid_sets[n]} "
+                    f"(mask = {masks[n].tolist()})")
+
+
+# =====================================================================
 # Device discipline regression tests (HK-3.1.1 pattern, carried over)
 # =====================================================================
 _PRE_FIX_ERROR = "not on the expected device cpu"
@@ -683,6 +886,18 @@ def main() -> int:
           test_step4perf_ppo_update_returns_kl_clipfrac_entropy)
     _run("ppo_update does one optim.step per minibatch",
           test_step4perf_ppo_update_one_optim_step_per_minibatch)
+
+    print("\n-- Step 5 (HK-4.5.2 batched-forward): bit-identical batched API --")
+    _run("forward_batched matches sequential forward",
+          test_step5perf_forward_batched_matches_sequential)
+    _run("get_value_batched matches sequential get_value",
+          test_step5perf_get_value_batched_matches_sequential)
+    _run("evaluate_actions_batched matches sequential per-action evaluate",
+          test_step5perf_evaluate_actions_batched_matches_sequential)
+    _run("act_batched deterministic=True matches sequential act",
+          test_step5perf_act_batched_deterministic_matches_sequential)
+    _run("act_batched stochastic respects per-env masks",
+          test_step5perf_act_batched_mask_honored_stochastic)
 
     print("\n-- Device discipline (HK-3.1.1 carryover) --")
     _run("encoder respects meta device (no cpu leak)", test_encoder_respects_meta_device)
