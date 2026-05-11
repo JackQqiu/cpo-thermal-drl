@@ -323,6 +323,121 @@ def test_step2_actor_critic_respects_meta_device() -> None:
 
 
 # =====================================================================
+# Step 3 — HGATEActorCritic.act + get_value
+# =====================================================================
+def test_step3_act_returns_expected_dict_keys() -> None:
+    """act() returns dict with action / log_prob / entropy / value."""
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([True] * 5, dtype=bool)
+    out = m.act(obs, mask, deterministic=False)
+    assert isinstance(out, dict), f"act() must return dict, got {type(out).__name__}"
+    for key in ("action", "log_prob", "entropy", "value"):
+        assert key in out, f"act() output missing key {key!r}; got {sorted(out.keys())}"
+    # action must be a python int (or 0-d int tensor) — see contract
+    a = out["action"]
+    if isinstance(a, torch.Tensor):
+        assert a.dim() == 0, f"action tensor must be scalar; got shape {tuple(a.shape)}"
+    else:
+        assert isinstance(a, int), f"action must be int or 0-d tensor; got {type(a).__name__}"
+    # log_prob / entropy / value all finite tensors
+    for k in ("log_prob", "entropy", "value"):
+        t = out[k]
+        assert isinstance(t, torch.Tensor), f"{k} not a tensor: {type(t).__name__}"
+        assert torch.isfinite(t).all(), f"{k} is non-finite: {t}"
+
+
+def test_step3_act_mask_honored_1000_samples() -> None:
+    """1000 stochastic samples must all satisfy action_mask."""
+    torch.manual_seed(42)
+    m = HGATEActorCritic(hidden_dim=32, num_procs=7,
+                          num_heads=2, num_gat_layers=1)
+    obs = _make_dummy_obs(N_task=4, N_proc=7)
+    # Mask out half the procs
+    mask = np.array([False, True, False, True, True, False, True], dtype=bool)
+    valid = set(np.where(mask)[0].tolist())
+    for _ in range(1000):
+        out = m.act(obs, mask, deterministic=False)
+        a = out["action"]
+        a_int = int(a.item()) if isinstance(a, torch.Tensor) else int(a)
+        assert a_int in valid, (
+            f"act() sampled invalid action {a_int} not in {valid} "
+            f"(mask = {mask.tolist()})")
+
+
+def test_step3_act_deterministic_repeatable() -> None:
+    """deterministic=True must produce the same action across repeated calls."""
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([False, True, True, False, True], dtype=bool)
+    a1 = m.act(obs, mask, deterministic=True)["action"]
+    a2 = m.act(obs, mask, deterministic=True)["action"]
+    a3 = m.act(obs, mask, deterministic=True)["action"]
+    aint = lambda x: int(x.item()) if isinstance(x, torch.Tensor) else int(x)
+    assert aint(a1) == aint(a2) == aint(a3), (
+        f"deterministic action varies across calls: {aint(a1)} / {aint(a2)} / {aint(a3)}")
+
+
+def test_step3_get_value_returns_scalar_finite() -> None:
+    """get_value(obs) returns finite scalar tensor; signature accepts NO mask."""
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    obs = _make_dummy_obs(N_task=4, N_proc=5)
+    v = m.get_value(obs)
+    assert isinstance(v, torch.Tensor), f"get_value must return tensor; got {type(v).__name__}"
+    assert v.dim() == 0 or v.numel() == 1, \
+        f"get_value must return scalar; got shape {tuple(v.shape)} numel={v.numel()}"
+    assert torch.isfinite(v).all(), f"get_value returned non-finite: {v}"
+
+
+def test_step3_get_value_agrees_with_forward() -> None:
+    """get_value(obs) must equal forward(obs, mask)[1] for the same obs."""
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    m.eval()
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([True] * 5, dtype=bool)
+    with torch.no_grad():
+        v_from_get   = m.get_value(obs)
+        _, v_from_fwd = m.forward(obs, mask)
+    # Both should be the same scalar value (encoder + critic + pool are
+    # deterministic and shared between the two code paths).
+    diff = (v_from_get.flatten() - v_from_fwd.flatten()).abs().max().item()
+    assert diff < 1e-6, (
+        f"get_value and forward()[1] disagree by {diff:.2e}; "
+        f"either critic path drifted or get_value re-ran actor by mistake")
+
+
+def test_step3_act_get_value_respect_meta_device() -> None:
+    """HK-3.1.1 carryover for the new Step-3 methods."""
+    m = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                          num_heads=2, num_gat_layers=1).to("meta")
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([True] * 5, dtype=bool)
+    for entry_label, fn in [
+        ("act",       lambda: m.act(obs, mask, deterministic=True)),
+        ("get_value", lambda: m.get_value(obs)),
+    ]:
+        try:
+            out = fn()
+        except RuntimeError as e:
+            assert _PRE_FIX_ERROR not in str(e), (
+                f"{entry_label}() has CPU-tensor leak (HK-3.1.1 signature):\n  {e}")
+            continue
+        # When meta-forward succeeds, every returned tensor must be on meta.
+        if isinstance(out, dict):
+            for k, t in out.items():
+                if isinstance(t, torch.Tensor):
+                    assert t.device.type == "meta", \
+                        f"act()[{k}].device = {t.device}, expected meta"
+        elif isinstance(out, torch.Tensor):
+            assert out.device.type == "meta", \
+                f"{entry_label}().device = {out.device}, expected meta"
+
+
+# =====================================================================
 # Device discipline regression tests (HK-3.1.1 pattern, carried over)
 # =====================================================================
 _PRE_FIX_ERROR = "not on the expected device cpu"
@@ -384,6 +499,14 @@ def main() -> int:
     _run("forward: (logits, value) shapes + finiteness",  test_step2_forward_logits_and_value_shape)
     _run("forward: gradient flows through full ActorCritic", test_step2_gradient_flow_through_full_actor_critic)
     _run("ActorCritic respects meta device (no cpu leak)", test_step2_actor_critic_respects_meta_device)
+
+    print("\n-- Step 3: HGATEActorCritic.act + get_value --")
+    _run("act: returns expected dict keys",            test_step3_act_returns_expected_dict_keys)
+    _run("act: mask honored over 1000 samples",        test_step3_act_mask_honored_1000_samples)
+    _run("act: deterministic=True is repeatable",      test_step3_act_deterministic_repeatable)
+    _run("get_value: returns scalar finite tensor",    test_step3_get_value_returns_scalar_finite)
+    _run("get_value agrees with forward()[1]",         test_step3_get_value_agrees_with_forward)
+    _run("act + get_value respect meta device",        test_step3_act_get_value_respect_meta_device)
 
     print("\n-- Device discipline (HK-3.1.1 carryover) --")
     _run("encoder respects meta device (no cpu leak)", test_encoder_respects_meta_device)

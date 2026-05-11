@@ -334,31 +334,85 @@ class HGATEActorCritic(nn.Module):
         action_mask:  np.ndarray,
         deterministic: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """Sample or argmax a processor index.
+        """Sample or argmax a processor index, return PPO-compatible dict.
 
-        Returns a PPO-compatible dict::
+        Returns
+        -------
+        dict::
             {
-                'action':   int proc index
-                'log_prob': scalar tensor
-                'entropy':  scalar tensor
-                'value':    scalar tensor (critic V(s))
+                'action':   int   — chosen processor index
+                'log_prob': Tensor (scalar) — log π(action | state) over the
+                                              MASKED distribution
+                'entropy':  Tensor (scalar) — H[π( · | state)] over the
+                                              MASKED distribution
+                'value':    Tensor (scalar) — V(s) from the critic
             }
+
+        Implementation
+        --------------
+        - Run forward to obtain (logits, value).  Critic V(s) is reused
+          for the GAE bootstrap so the caller does not need a separate
+          ``get_value`` call.
+        - Apply ``action_mask`` with ``masked_fill(-inf)`` BEFORE the
+          softmax so the resulting distribution is properly renormalised
+          over only valid procs.
+        - Sample via Categorical or argmax depending on ``deterministic``.
         """
-        # TODO checklist Step 3:
-        #   - apply action_mask before softmax (mask invalid with -inf)
-        #   - Categorical sample (or argmax if deterministic)
-        #   - return dict with action / log_prob / entropy / value
-        raise NotImplementedError(
-            "see hgate_ppo_checklist.md Step 3 — masked sampling"
-        )
+        action_mask_np = np.asarray(action_mask, dtype=bool)
+        if not action_mask_np.any():
+            raise RuntimeError(
+                "HGATEActorCritic.act: action_mask is all False — "
+                "no valid procs"
+            )
+
+        logits, value = self.forward(graph_obs, action_mask_np)
+        device = logits.device
+
+        # Mask invalid procs with -inf so they have zero softmax prob.
+        mask_t = torch.tensor(action_mask_np, dtype=torch.bool, device=device)
+        masked_logits = logits.masked_fill(~mask_t, float("-inf"))
+
+        if deterministic:
+            action_t = torch.argmax(masked_logits)
+        else:
+            dist = torch.distributions.Categorical(logits=masked_logits)
+            action_t = dist.sample()
+        action_int = int(action_t.item())
+
+        # Always recompute log_prob / entropy from a fresh softmax over
+        # the masked logits — this keeps the values defined even in the
+        # deterministic branch (where dist was never built).  Entropy
+        # is computed only over the VALID positions; invalid positions
+        # contribute 0 (their prob is exactly 0).
+        log_probs_all = F.log_softmax(masked_logits, dim=-1)
+        probs_all     = log_probs_all.exp()
+        log_prob      = log_probs_all[action_int]
+        entropy = -(probs_all[mask_t] * log_probs_all[mask_t]).sum()
+
+        return {
+            "action":   action_int,
+            "log_prob": log_prob,
+            "entropy":  entropy,
+            "value":    value,
+        }
 
     def get_value(self, graph_obs: Dict[str, Any]) -> torch.Tensor:
-        """Return scalar V(s); used for GAE bootstrap."""
-        # TODO checklist Step 3:
-        #   - encode -> pool -> critic -> return scalar
-        raise NotImplementedError(
-            "see hgate_ppo_checklist.md Step 3 — value head"
-        )
+        """Return scalar V(s); used for GAE bootstrap by the PPO loop.
+
+        Skips the actor scoring path (no per-pair MLP, no action_mask
+        needed) — just encoder + global-pool + critic.  This is
+        cheaper than calling ``forward`` when the actor's logits are
+        not required.
+        """
+        device = next(self.parameters()).device
+        task_embs, proc_embs = self.encoder(graph_obs)
+        all_embs = torch.cat([task_embs, proc_embs], dim=0)
+        if all_embs.shape[0] == 0:
+            global_ctx = torch.zeros(self.hidden_dim, device=device)
+        else:
+            global_ctx = all_embs.mean(dim=0)         # (H,)
+        value = self.critic(global_ctx).squeeze(-1)   # ()
+        return value
 
 
 # =====================================================================
