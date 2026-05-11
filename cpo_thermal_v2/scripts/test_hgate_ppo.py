@@ -508,6 +508,102 @@ def test_step8_scheduler_deterministic_repeatable() -> None:
 
 
 # =====================================================================
+# Step 4 (HK-4.5 perf-fix) — multi-env rollout + minibatch PPO update
+# =====================================================================
+def _make_dummy_rollout(M: int = 8, num_procs: int = 5, device="cpu"):
+    """Build a tiny RolloutBatch in-memory with M flat transitions.
+    Uses the SAME synthetic graph_obs schema as Step 1-3 tests.
+    """
+    from cpo_thermal_v2.training.train_hgate_ppo import RolloutBatch
+
+    rng = np.random.default_rng(7)
+    graph_obs = [_make_dummy_obs(N_task=4, N_proc=num_procs) for _ in range(M)]
+    masks     = [np.array([True] * num_procs, dtype=bool) for _ in range(M)]
+    actions   = rng.integers(0, num_procs, size=M).astype(np.int64)
+    old_log_probs = torch.full((M,), -float(np.log(num_procs)),
+                                dtype=torch.float32, device=device)
+    # advantages already normalised (mean 0, std 1)
+    raw_adv = rng.standard_normal(M).astype(np.float32)
+    raw_adv = (raw_adv - raw_adv.mean()) / (raw_adv.std() + 1e-8)
+    advantages = torch.tensor(raw_adv, dtype=torch.float32, device=device)
+    returns    = torch.tensor(rng.standard_normal(M).astype(np.float32),
+                              dtype=torch.float32, device=device)
+    return RolloutBatch(
+        graph_obs     = graph_obs,
+        masks         = masks,
+        actions       = actions,
+        old_log_probs = old_log_probs,
+        advantages    = advantages,
+        returns       = returns,
+    )
+
+
+def test_step4perf_ppo_update_returns_kl_clipfrac_entropy() -> None:
+    """_ppo_update must return a metrics dict containing approx_kl,
+    clip_frac, entropy (with finite values), in addition to losses.
+    These are the §Fix-2 metrics that replace the loss_pg=0 logging
+    artifact."""
+    from cpo_thermal_v2.training.train_hgate_ppo import _ppo_update
+
+    m = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    opt = torch.optim.Adam(m.parameters(), lr=3e-4)
+    rollout = _make_dummy_rollout(M=8, num_procs=5)
+    metrics = _ppo_update(
+        model=m, optimizer=opt, rollout=rollout,
+        ppo_epochs=2, minibatch_size=4,
+        clip_eps=0.2, value_coef=0.5, entropy_coef=0.01,
+        max_grad_norm=0.5, device=torch.device("cpu"),
+    )
+    for k in ("loss_pg", "loss_v", "loss_ent",
+              "approx_kl", "clip_frac", "entropy"):
+        assert k in metrics, f"_ppo_update metrics missing {k!r}; got {sorted(metrics.keys())}"
+        v = metrics[k]
+        assert isinstance(v, float), f"metrics[{k!r}] not float: {type(v).__name__}"
+        assert np.isfinite(v), f"metrics[{k!r}] is non-finite: {v}"
+    # approx_kl should be >= 0 (Schulman approximation, non-negative)
+    assert metrics["approx_kl"] >= -1e-6, \
+        f"approx_kl is unexpectedly negative: {metrics['approx_kl']}"
+    # clip_frac is a probability
+    assert 0.0 <= metrics["clip_frac"] <= 1.0, \
+        f"clip_frac out of [0,1]: {metrics['clip_frac']}"
+    # entropy should be > 0 (we sample from non-degenerate softmax)
+    assert metrics["entropy"] > 0.0, \
+        f"entropy is non-positive: {metrics['entropy']}"
+
+
+def test_step4perf_ppo_update_one_optim_step_per_minibatch() -> None:
+    """With M=8 flat transitions, mb_size=4, ppo_epochs=3:
+    expect 3 epochs × 2 minibatches = 6 optimizer.step() calls
+    (NOT 3 × 8 = 24, which would be the old per-transition pattern)."""
+    from cpo_thermal_v2.training.train_hgate_ppo import _ppo_update
+
+    m = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    opt = torch.optim.Adam(m.parameters(), lr=3e-4)
+    # Count optimizer.step calls
+    real_step = opt.step
+    step_calls = [0]
+    def _counted_step(*args, **kwargs):
+        step_calls[0] += 1
+        return real_step(*args, **kwargs)
+    opt.step = _counted_step
+
+    rollout = _make_dummy_rollout(M=8, num_procs=5)
+    _ppo_update(
+        model=m, optimizer=opt, rollout=rollout,
+        ppo_epochs=3, minibatch_size=4,
+        clip_eps=0.2, value_coef=0.5, entropy_coef=0.01,
+        max_grad_norm=0.5, device=torch.device("cpu"),
+    )
+    expected = 3 * (8 // 4)  # ppo_epochs × num_minibatches
+    assert step_calls[0] == expected, (
+        f"optimizer.step called {step_calls[0]} times, expected {expected} "
+        f"(ppo_epochs=3 × num_minibatches=2).  The §Fix-B pattern is one "
+        f"backward+step per minibatch, NOT per transition.")
+
+
+# =====================================================================
 # Device discipline regression tests (HK-3.1.1 pattern, carried over)
 # =====================================================================
 _PRE_FIX_ERROR = "not on the expected device cpu"
@@ -581,6 +677,12 @@ def main() -> int:
     print("\n-- Step 8: HGATEPPOScheduler (eval-time wrapper) --")
     _run("scheduler loads ckpt + schedules valid action", test_step8_scheduler_loads_ckpt_and_schedules)
     _run("scheduler deterministic=True is repeatable",    test_step8_scheduler_deterministic_repeatable)
+
+    print("\n-- Step 4 (HK-4.5 perf-fix): _ppo_update minibatch + new metrics --")
+    _run("ppo_update returns approx_kl + clip_frac + entropy",
+          test_step4perf_ppo_update_returns_kl_clipfrac_entropy)
+    _run("ppo_update does one optim.step per minibatch",
+          test_step4perf_ppo_update_one_optim_step_per_minibatch)
 
     print("\n-- Device discipline (HK-3.1.1 carryover) --")
     _run("encoder respects meta device (no cpu leak)", test_encoder_respects_meta_device)
