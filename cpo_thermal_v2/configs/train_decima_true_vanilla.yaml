@@ -28,6 +28,11 @@ _inherit: default
 
 training:
   algorithm:        reinforce
+  # device: explicit anchor for paper reproducibility (HK-3.1.1).  "auto"
+  # also works; explicit is preferred so deployment intent is visible
+  # in the resolved_config that ships with each checkpoint.  Override
+  # to cpu at the CLI for local smoke: --override training.device=cpu
+  device:           cuda
   baseline_type:    moving_average
   baseline_window:  50
   learning_rate:    5.0e-4

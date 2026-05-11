@@ -41,6 +41,7 @@ _inherit: default
 
 training:
   algorithm:        reinforce            # NEW: dispatch in train.py
+  device:           cuda                 # HK-3.1.1: explicit V100 target
   baseline_type:    moving_average       # Mao 2019 §5.1
   baseline_window:  50                   # episodes
   learning_rate:    5.0e-4               # Mao 2019 had 1e-3; tune in pilot

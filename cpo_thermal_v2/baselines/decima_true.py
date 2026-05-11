@@ -143,7 +143,11 @@ class DecimaTruePolicy(nn.Module):
           ``graph_obs['current_task_idx']``; downstream sampling code
           attributes the gradient to whichever processor the policy
           selects for *that* task.
+        * Every locally-built tensor lives on the same device as the
+          module parameters (HK-3.1.1 fix — previously hard-coded CPU
+          regardless of where the model was, causing V100 idle).
         """
+        device = next(self.parameters()).device
         N_proc = int(np.asarray(action_mask).shape[0])
 
         task_x_raw = np.asarray(graph_obs.get("task_x", []),
@@ -154,7 +158,7 @@ class DecimaTruePolicy(nn.Module):
         # Defensive: empty task set => uniform over unmasked procs
         if task_x_raw.size == 0 or task_x_raw.ndim != 2:
             # uniform; mask handled by caller
-            return torch.zeros(N_proc)
+            return torch.zeros(N_proc, device=device)
 
         # If proc_x is missing (filtered) we need *some* tensor so the
         # GCN can include processor nodes — fall back to zeros.  This
@@ -164,8 +168,8 @@ class DecimaTruePolicy(nn.Module):
             proc_x_raw = np.zeros((N_proc, self.proc_proj.in_features),
                                   dtype=np.float32)
 
-        task_x = torch.from_numpy(task_x_raw)
-        proc_x = torch.from_numpy(proc_x_raw)
+        task_x = torch.from_numpy(task_x_raw).to(device)
+        proc_x = torch.from_numpy(proc_x_raw).to(device)
 
         # --- per-type projection to hidden_dim ---
         task_h = self.task_proj(task_x)        # (T, hidden_dim)
@@ -175,9 +179,11 @@ class DecimaTruePolicy(nn.Module):
         T = task_h.shape[0]
         P = proc_h.shape[0]
         task_tag = torch.cat(
-            [torch.ones(T, 1), torch.zeros(T, 1)], dim=1)
+            [torch.ones(T, 1, device=device),
+             torch.zeros(T, 1, device=device)], dim=1)
         proc_tag = torch.cat(
-            [torch.zeros(P, 1), torch.ones(P, 1)], dim=1)
+            [torch.zeros(P, 1, device=device),
+             torch.ones(P, 1, device=device)], dim=1)
         task_h = torch.cat([task_h, task_tag], dim=1)   # (T, hidden+2)
         proc_h = torch.cat([proc_h, proc_tag], dim=1)   # (P, hidden+2)
 
@@ -199,9 +205,10 @@ class DecimaTruePolicy(nn.Module):
             edge_list.append((T + p, T + p))
 
         if not edge_list:
-            edge_index = torch.zeros((2, 0), dtype=torch.long)
+            edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
         else:
-            edge_index = torch.tensor(edge_list, dtype=torch.long).t()
+            edge_index = torch.tensor(edge_list, dtype=torch.long,
+                                       device=device).t()
 
         # --- GCN stack ---
         h = x
@@ -253,9 +260,11 @@ class DecimaTruePolicy(nn.Module):
             )
 
         logits = self.forward(graph_obs, action_mask_np)
+        device = logits.device
 
-        # Mask invalid procs with -inf
-        mask_t = torch.tensor(action_mask_np, dtype=torch.bool)
+        # Mask invalid procs with -inf (mask tensor must live on the
+        # same device as logits — HK-3.1.1 fix).
+        mask_t = torch.tensor(action_mask_np, dtype=torch.bool, device=device)
         masked_logits = logits.masked_fill(~mask_t, float("-inf"))
 
         if deterministic:
@@ -319,13 +328,19 @@ class DecimaTrueAgent:
         self,
         rewards: List[float],
     ) -> torch.Tensor:
-        """Compute G_t = Σ_{k≥0} gamma^k * r_{t+k} for one episode."""
+        """Compute G_t = Σ_{k≥0} gamma^k * r_{t+k} for one episode.
+
+        Output tensor lives on the policy's device so REINFORCE's
+        ``log_probs * adv`` runs without a device mismatch on V100
+        (HK-3.1.1 fix).
+        """
         G = 0.0
         out: List[float] = [0.0] * len(rewards)
         for t in reversed(range(len(rewards))):
             G = rewards[t] + self.gamma * G
             out[t] = G
-        return torch.tensor(out, dtype=torch.float32)
+        device = next(self.policy.parameters()).device
+        return torch.tensor(out, dtype=torch.float32, device=device)
 
     # -----------------------------------------------------------------
     def update(

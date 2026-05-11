@@ -121,6 +121,22 @@ def train_reinforce(cfg: Dict[str, Any]) -> None:
     hidden_dim      = int(model_cfg.get("hidden_dim", 256))
     num_gcn_layers  = int(model_cfg.get("num_gcn_layers", 4))
 
+    # Resolve device — mirrors train.py:226-240 pattern.  "auto" picks
+    # cuda if available, else cpu.  Explicit values ("cuda:0" / "cpu" /
+    # "cuda:N") are honoured as-is.  Without this resolution the policy
+    # would stay on cpu forever (HK-3.1.1 bug: V100 ran with 0%
+    # GPU-Util because train_reinforce had zero device handling).
+    device_str = str(train_cfg.get("device", "auto")).lower()
+    if device_str == "auto":
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    else:
+        if device_str.startswith("cuda") and not torch.cuda.is_available():
+            print(f"⚠️  config requests {device_str!r} but CUDA is unavailable. "
+                  f"Falling back to cpu.")
+            device = torch.device("cpu")
+        else:
+            device = torch.device(device_str)
+
     run_name        = log_cfg.get("run_name", "decima_true_run")
     ckpt_dir        = Path(log_cfg.get(
         "checkpoint_dir", f"checkpoints/{run_name}"))
@@ -138,6 +154,7 @@ def train_reinforce(cfg: Dict[str, Any]) -> None:
           f"baseline_window={baseline_window}  gamma={gamma}  "
           f"entropy_coef={entropy_coef}")
     print(f"[train_decima_true] model: hidden={hidden_dim} gcn_layers={num_gcn_layers}")
+    print(f"[train_decima_true] device={device}")
     # Resolve reward_mode: env_factory builds RewardConfig from the top-
     # level `reward:` section, so we look there (not under env:).
     _reward_mode = (cfg.get("reward", {}) or {}).get(
@@ -156,7 +173,7 @@ def train_reinforce(cfg: Dict[str, Any]) -> None:
     policy = DecimaTruePolicy(
         hidden_dim     = hidden_dim,
         num_gcn_layers = num_gcn_layers,
-    )
+    ).to(device)
     agent = DecimaTrueAgent(
         policy,
         lr              = learning_rate,

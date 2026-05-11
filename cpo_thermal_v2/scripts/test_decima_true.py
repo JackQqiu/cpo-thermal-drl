@@ -18,6 +18,21 @@ from typing import Any, Callable, Dict, List, Tuple
 import numpy as np
 import torch
 
+# pytest is optional — when present, decorators on the cuda test become
+# native skipif marks.  When absent, the cuda test raises Skipped at
+# runtime which the custom driver translates to a [SKIP] result.
+try:
+    import pytest                                              # noqa: F401
+    _PYTEST = True
+except ImportError:                                           # pragma: no cover
+    _PYTEST = False
+
+
+class _Skip(Exception):
+    """Raised inside a test to indicate it should be skipped rather than
+    pass/fail.  Used in lieu of pytest.skip() when pytest is unavailable.
+    """
+
 from cpo_thermal_v2.baselines.decima_true import (
     DecimaTruePolicy, DecimaTrueAgent,
 )
@@ -62,6 +77,10 @@ def _run(name: str, fn: Callable[[], None]) -> None:
         fn()
         print(f"[PASS] {name}")
         _RESULTS.append((name, True, ""))
+    except _Skip as e:
+        msg = str(e)
+        print(f"[SKIP] {name}: {msg}")
+        _RESULTS.append((name, True, f"SKIP: {msg}"))     # skip counts as pass
     except AssertionError as e:
         msg = str(e) or "assertion failed"
         print(f"[FAIL] {name}: {msg}")
@@ -307,6 +326,95 @@ def test_step6_observation_keys_filter() -> None:
 
 
 # =====================================================================
+# HK-3.1.1 — Device discipline regression tests
+# =====================================================================
+# Catches the bug where DecimaTruePolicy + forward + agent build CPU
+# tensors regardless of where the model parameters live (the V100 0%
+# GPU-Util pilot symptom).  After HK-3.1.1's fix:
+#   - meta test: forward must NOT raise "Tensor on device * is not on
+#     the expected device cpu!" — that exact message is the bug
+#     signature.  If forward fully completes, output device must match
+#     the model's parameter device.
+#   - cuda test (skipif no cuda): hard regression check on the actual
+#     V100 deployment device.
+
+# Exact substring of the pre-fix error (PyTorch wording stable across 1.x/2.x)
+_PRE_FIX_ERROR = "not on the expected device cpu"
+
+
+def _device_of(p: DecimaTruePolicy) -> torch.device:
+    return next(p.parameters()).device
+
+
+def test_policy_respects_meta_device() -> None:
+    """Bug regression: after moving policy to 'meta', forward must not
+    create CPU tensors that fight the meta-resident parameters.
+
+    Acceptance:
+      - either forward returns without RuntimeError AND output.device == meta
+      - or forward raises an error whose message does NOT contain
+        ``"not on the expected device cpu"`` (the pre-fix signature).
+    """
+    policy = DecimaTruePolicy(hidden_dim=16, num_gcn_layers=2).to("meta")
+    assert _device_of(policy).type == "meta", \
+        "test setup failed: policy did not move to meta"
+
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.ones(5, dtype=bool)
+    try:
+        logits = policy.forward(obs, mask)
+    except RuntimeError as e:
+        msg = str(e)
+        assert _PRE_FIX_ERROR not in msg, (
+            f"forward still has CPU-tensor leak (HK-3.1.1 bug "
+            f"signature present):\n  {msg}")
+        # Some other RuntimeError (e.g. torch_geometric scatter not
+        # supported on meta) is acceptable — the device-discipline
+        # regression we care about is the cpu-leak path.
+        return
+    # If forward completed cleanly, output must respect model device.
+    assert logits.device.type == "meta", (
+        f"forward succeeded but output device is {logits.device}, "
+        f"expected meta — model device was not propagated to output")
+
+
+def test_policy_respects_cuda_device() -> None:
+    """End-to-end CUDA regression for the V100 deployment path.
+
+    Skipped on systems without CUDA (e.g. Mac dev box).  Hard regression
+    check on the actual V100 deployment device.
+
+    Acceptance: model on cuda, forward returns logits on cuda, sampled
+    action is a valid masked int, log_prob and entropy are finite cuda
+    tensors.
+    """
+    if not torch.cuda.is_available():
+        raise _Skip("CUDA not available on this host (runs on V100 only)")
+
+    policy = DecimaTruePolicy(hidden_dim=16, num_gcn_layers=2).to("cuda")
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([True, True, False, True, True], dtype=bool)
+
+    logits = policy.forward(obs, mask)
+    assert logits.device.type == "cuda", \
+        f"forward output device {logits.device}, expected cuda"
+    assert torch.isfinite(logits).all(), f"non-finite cuda logits: {logits}"
+
+    # Stochastic + deterministic both honour mask + return cuda tensors
+    a_sto, lp_sto, ent_sto = policy.select_action(obs, mask,
+                                                  deterministic=False)
+    a_det, lp_det, ent_det = policy.select_action(obs, mask,
+                                                  deterministic=True)
+    assert mask[a_sto] and mask[a_det], \
+        f"sampled invalid actions: sto={a_sto} det={a_det} mask={mask}"
+    for tname, t in [("log_prob_sto", lp_sto), ("entropy_sto", ent_sto),
+                     ("log_prob_det", lp_det), ("entropy_det", ent_det)]:
+        assert t.device.type == "cuda", \
+            f"{tname}.device = {t.device}, expected cuda"
+        assert torch.isfinite(t), f"{tname} non-finite: {t}"
+
+
+# =====================================================================
 # Driver
 # =====================================================================
 def main() -> int:
@@ -335,11 +443,16 @@ def main() -> int:
     _run("truncate penalty fires under both modes",  test_step6_reward_mode_truncate_still_fires)
     _run("observation_keys filter strips graph_obs", test_step6_observation_keys_filter)
 
+    print("\n-- HK-3.1.1: device discipline regression --")
+    _run("policy respects meta device (no cpu leak)", test_policy_respects_meta_device)
+    _run("policy respects cuda device (V100 path)",   test_policy_respects_cuda_device)
+
     print()
     print("=" * 72)
-    n_pass = sum(1 for _, ok, _ in _RESULTS if ok)
+    n_skip = sum(1 for _, ok, msg in _RESULTS if ok and msg.startswith("SKIP"))
+    n_pass = sum(1 for _, ok, msg in _RESULTS if ok and not msg.startswith("SKIP"))
     n_fail = sum(1 for _, ok, _ in _RESULTS if not ok)
-    print(f"SUMMARY:  {n_pass} passed / {n_fail} failed  "
+    print(f"SUMMARY:  {n_pass} passed / {n_skip} skipped / {n_fail} failed  "
           f"({len(_RESULTS)} total)")
     if n_fail:
         print("\nFailures:")
