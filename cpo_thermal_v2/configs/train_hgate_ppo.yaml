@@ -1,0 +1,62 @@
+# =====================================================================
+# train_hgate_ppo.yaml — HGATE-PPO (Wu 2025 IEEE IoT Journal) baseline
+# =====================================================================
+# Status (HK-4.5): UNBLOCKED.  Code support shipped:
+#   HK-4.1  HGATEEncoder + adapter
+#   HK-4.2  HGATEActorCritic actor + critic heads
+#   HK-4.3  act() + get_value()
+#   HK-4.4  train.py dispatch + HGATEPPOScheduler + 100-step Mac smoke PASS
+#   HK-3.1.4 evaluation/evaluate.py registration
+#
+# §5 ablation chain isolation point:
+#   Ours-NoThermal  --(strip RC edge + cross-attention)-->  HGATE-PPO
+#
+# Hyper-params: Wu 2025 §4.  num_envs and minibatch_size are inherited
+# from the dual-channel PPO trainer's defaults but the current HGATE
+# trainer (train_hgate_ppo.py) is single-env / per-step PPO update —
+# these keys are silently ignored by the HGATE trainer until a
+# multi-env refactor lands.  See sbatch header for wallclock implications.
+# =====================================================================
+_inherit: default
+
+training:
+  algorithm:        ppo
+  device:           cuda             # HK-3.1.1: explicit V100 anchor
+  total_steps:      5_000_000        # match Ours stage 1 budget
+  num_envs:         16               # mirror Ours stage 1 async batch
+  rollout_length:   256
+  learning_rate:    3.0e-4           # Wu 2025 default
+  clip_eps:         0.2
+  value_coef:       0.5
+  entropy_coef:     0.01
+  gae_lambda:       0.95
+  gamma:            0.99
+  ppo_epochs:       4
+  minibatch_size:   64
+
+model:
+  architecture:     hgate_ppo        # NEW: dispatch in checklist Step 5
+  hidden_dim:       128
+  num_gat_layers:   2
+  num_heads:        4
+  # NOTE: explicitly NOT passing rc_edge_dim / cross_attention_dim —
+  # this baseline has neither (controlled comparison vs Ours).
+
+env:
+  action_mode:      auto_only
+  # No observation_keys filter.  HGATE sees the full graph_obs schema
+  # EXCEPT that the encoder consumes only task_x / proc_x / edges_t2t
+  # / edges_t2p / edges_t2p_attr[:, 0]  (NOT edges_p2p* — the RC
+  # coupling — and NOT edges_t2p_attr[:, 1] — est_temp_rise).  The
+  # encoder enforces this in code, not via env-side stripping.
+
+logging:
+  run_name:         hgate_ppo_N17
+  checkpoint_dir:   "checkpoints/hgate_ppo_N17"
+  tb_log_dir:       "tb_logs/hgate_ppo_N17"
+
+# =====================================================================
+# Runtime guard removed (HK-4.5): HGATE-PPO Steps 1-3 + 5 + 6 + 8
+# committed (HK-4.1 through HK-4.4); Mac CPU smoke PASS (5/5 signals);
+# eval-side registration shipped (HK-3.1.4).  V100 pilot unblocked.
+# =====================================================================
