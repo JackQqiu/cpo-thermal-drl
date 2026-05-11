@@ -18,24 +18,21 @@
 # Chain reads: vanilla -> thermal isolates reward; thermal -> fair
 # isolates algo+GNN; fair -> Ours isolates RC edge attribute.
 # =====================================================================
-# !!!! BLOCKED — DO NOT SUBMIT YET !!!!
-# Code support is a STUB.  See:
-#   - baselines/decima_true.py            (NotImplementedError throughout)
-#   - paper_drafts/decima_true_implementation_checklist.md  (10-step plan)
+# Status (HK-3.1.2): UNBLOCKED.
 #
-# This config locks in the hyperparameter intent; the runtime sbatch
-# guard refuses to launch while the `_BLOCKED_DO_NOT_RUN:` line below
-# is still present.
+# Code support (decima_true.py Step 1-6, env reward_mode dispatch,
+# observation_keys filter) shipped in HK-3.0 / HK-3.1 / HK-3.1.1.
+# Vanilla pilot result that motivates running this variant:
+#   - 5380 episodes (~1.3 M env-steps) at ep_return baseline ≈ 20
+#     -> no learning under makespan_only reward in this env
+#   - vanilla ckpt retained as the paper §5 ablation data point
+#     ("homog GCN + REINFORCE + Mao reward, plateaued")
 #
-# Once decima_true.py is implemented and checklist Step 1-7 passes:
-#   1. Wire DecimaTrueAgent into training/train.py's algorithm dispatch
-#      (currently PPO-only)
-#   2. Wire DecimaTruePolicy into models/__init__.py architecture registry
-#   3. Implement env-side `reward_mode` dispatch
-#      ('makespan_only' | 'thermal_aware') — currently absent
-#   4. Implement env-side `observation_keys` filter
-#   5. Remove the `_BLOCKED_DO_NOT_RUN:` line below
-#   6. Resubmit scripts/train_decima_true_thermal.sbatch
+# This thermal variant trains the same DecimaTruePolicy on identical
+# hyper-params but with reward_mode=thermal_aware.  The question it
+# answers: is REINFORCE + homog GCN capable of learning at all in
+# this env when the reward signal carries thermal information, or
+# is the algorithm itself the bottleneck?
 # =====================================================================
 _inherit: default
 
@@ -73,6 +70,7 @@ logging:
   tb_log_dir:       "tb_logs/decima_true_thermal_N17"
 
 # =====================================================================
-# RUNTIME GUARD — keep until baselines/decima_true.py is implemented
+# Runtime guard removed (HK-3.1.2): decima_true Step 1-6 implemented,
+# device dispatch fixed, vanilla pilot confirmed reward-channel choice
+# is the right next thing to probe.
 # =====================================================================
-_BLOCKED_DO_NOT_RUN: "Code support not yet implemented (see yaml header + checklist)."
