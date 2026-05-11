@@ -438,6 +438,76 @@ def test_step3_act_get_value_respect_meta_device() -> None:
 
 
 # =====================================================================
+# Step 8 — HGATEPPOScheduler (eval-time wrapper)
+# =====================================================================
+def test_step8_scheduler_loads_ckpt_and_schedules() -> None:
+    """Save a fresh ActorCritic state_dict, load via Scheduler, schedule()
+    returns a valid masked int that satisfies the action mask."""
+    import tempfile, os
+    torch.manual_seed(0)
+    inner = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                              num_heads=2, num_gat_layers=1,
+                              task_in_dim=8, proc_in_dim=7)
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "tiny.pt")
+        torch.save({"model": inner.state_dict(),
+                    "global_step": 0,
+                    "metrics_summary": {"ep_ret_mean": 0.0}}, p)
+
+        from cpo_thermal_v2.baselines.hgate_ppo import HGATEPPOScheduler
+        sch = HGATEPPOScheduler(
+            ckpt_path=p,
+            num_nodes=5,
+            deterministic=True,
+            device="cpu",
+            hidden_dim=16,
+            num_gat_layers=1,
+            num_heads=2,
+        )
+        assert sch.name == "HGATE-PPO", f"name = {sch.name!r}"
+        assert sch.action_mode == "auto_only"
+
+        # Construct an info dict matching what cpo_thermal_env emits
+        obs = _make_dummy_obs(N_task=4, N_proc=5)
+        info = {
+            "graph_obs":   [obs],
+            "action_mask": np.array([True, False, True, True, False],
+                                     dtype=bool),
+        }
+        action = sch.schedule(None, info)
+        assert isinstance(action, int), \
+            f"schedule must return int (auto_only); got {type(action).__name__}"
+        assert 0 <= action < 5, f"action {action} out of range"
+        assert info["action_mask"][action], \
+            f"schedule returned masked-out action {action}; " \
+            f"mask = {info['action_mask'].tolist()}"
+
+
+def test_step8_scheduler_deterministic_repeatable() -> None:
+    """deterministic=True in scheduler ctor -> same schedule output across calls."""
+    import tempfile, os
+    torch.manual_seed(1)
+    inner = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                              num_heads=2, num_gat_layers=1)
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "tiny.pt")
+        torch.save({"model": inner.state_dict()}, p)
+
+        from cpo_thermal_v2.baselines.hgate_ppo import HGATEPPOScheduler
+        sch = HGATEPPOScheduler(ckpt_path=p, num_nodes=5,
+                                  deterministic=True, device="cpu",
+                                  hidden_dim=16, num_gat_layers=1, num_heads=2)
+        obs = _make_dummy_obs(N_task=4, N_proc=5)
+        info = {"graph_obs": [obs],
+                "action_mask": np.array([False, True, True, True, True], dtype=bool)}
+        a1 = sch.schedule(None, info)
+        a2 = sch.schedule(None, info)
+        a3 = sch.schedule(None, info)
+        assert a1 == a2 == a3, \
+            f"deterministic scheduler varies across calls: {a1} / {a2} / {a3}"
+
+
+# =====================================================================
 # Device discipline regression tests (HK-3.1.1 pattern, carried over)
 # =====================================================================
 _PRE_FIX_ERROR = "not on the expected device cpu"
@@ -507,6 +577,10 @@ def main() -> int:
     _run("get_value: returns scalar finite tensor",    test_step3_get_value_returns_scalar_finite)
     _run("get_value agrees with forward()[1]",         test_step3_get_value_agrees_with_forward)
     _run("act + get_value respect meta device",        test_step3_act_get_value_respect_meta_device)
+
+    print("\n-- Step 8: HGATEPPOScheduler (eval-time wrapper) --")
+    _run("scheduler loads ckpt + schedules valid action", test_step8_scheduler_loads_ckpt_and_schedules)
+    _run("scheduler deterministic=True is repeatable",    test_step8_scheduler_deterministic_repeatable)
 
     print("\n-- Device discipline (HK-3.1.1 carryover) --")
     _run("encoder respects meta device (no cpu leak)", test_encoder_respects_meta_device)

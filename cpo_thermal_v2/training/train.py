@@ -763,6 +763,16 @@ def main() -> None:
             f"Unknown training.algorithm={algo!r}. "
             f"Supported: 'ppo' (default), 'reinforce'."
         )
+
+    # Architecture dispatch (HGATE-PPO Step 5, Decision 2).  HGATE has
+    # a single-critic per-env interface incompatible with the dual-
+    # channel batched PPO trainer below, so route to its own PPO loop.
+    arch = (cfg.get("model", {}) or {}).get("architecture", "").lower()
+    if arch == "hgate_ppo":
+        from cpo_thermal_v2.training.train_hgate_ppo import train_hgate_ppo
+        train_hgate_ppo(cfg)
+        return
+
     train(cfg)
 
 

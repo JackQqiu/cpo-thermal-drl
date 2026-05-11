@@ -438,27 +438,45 @@ class HGATEPPOScheduler(BaseScheduler):
         hidden_dim:     int = 128,
         num_gat_layers: int = 2,
         num_heads:      int = 4,
+        task_in_dim:    int = 8,
+        proc_in_dim:    int = 7,
     ):
         super().__init__(action_mode="auto_only", K_delay=5)
         self.num_nodes     = int(num_nodes)
         self.deterministic = bool(deterministic)
         self.device        = device
-        # TODO checklist Step 8:
-        #   - self._model = HGATEActorCritic(...)
-        #   - load_state_dict(strict=True)
-        #   - self._model.eval()
-        raise NotImplementedError(
-            "see hgate_ppo_checklist.md Step 8 — eval-time wrapper"
-        )
+
+        self._model = HGATEActorCritic(
+            hidden_dim     = hidden_dim,
+            num_procs      = num_nodes,
+            num_heads      = num_heads,
+            num_gat_layers = num_gat_layers,
+            task_in_dim    = task_in_dim,
+            proc_in_dim    = proc_in_dim,
+        ).to(device)
+
+        state = torch.load(ckpt_path, map_location=device,
+                           weights_only=False)
+        if isinstance(state, dict):
+            if "model" in state:
+                state = state["model"]
+            elif "policy" in state:
+                state = state["policy"]
+        self._model.load_state_dict(state, strict=True)
+        self._model.eval()
 
     def reset(self, obs: np.ndarray, info: Dict[str, Any]) -> None:
-        pass    # stateless
+        pass    # stateless (Wu 2025 policy is purely reactive)
 
     def schedule(self, obs: np.ndarray, info: Dict[str, Any]) -> Action:
-        # TODO checklist Step 8:
-        #   - extract graph_obs + action_mask from info
-        #   - run self._model.act(deterministic=self.deterministic)
-        #   - return self._wrap_action(int(out['action']))
-        raise NotImplementedError(
-            "see hgate_ppo_checklist.md Step 8 — schedule()"
-        )
+        graph_obs = info["graph_obs"][0] if isinstance(
+            info["graph_obs"], (list, np.ndarray)
+        ) else info["graph_obs"]
+        action_mask = np.asarray(info["action_mask"], dtype=bool)
+
+        with torch.no_grad():
+            out = self._model.act(
+                graph_obs, action_mask,
+                deterministic=self.deterministic,
+            )
+        return self._wrap_action(int(out["action"]))
