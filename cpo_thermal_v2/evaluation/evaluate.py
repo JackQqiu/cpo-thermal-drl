@@ -170,6 +170,56 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
                   "(mask-thermal hack) was removed in HK-2.1.5.")
             # No factories.append — Decima column simply absent from results
 
+    # Decima true (HK-3.x reproduction of Mao 2019 SIGCOMM).  Two
+    # variants share the same DecimaTruePolicy class but differ in
+    # training-time reward channel (makespan_only vs thermal_aware).
+    # Both auto_only-only.  Each is opt-in via its own ckpt path so the
+    # eval pipeline can run any subset.
+    for _dt_name, _dt_ckpt_key in [
+        ("Decima-vanilla", "decima_true_vanilla_ckpt"),
+        ("Decima-thermal", "decima_true_thermal_ckpt"),
+    ]:
+        if not _included(_dt_name):
+            continue
+        _dt_ckpt = eval_cfg.get(_dt_ckpt_key, None)
+        if not _dt_ckpt:
+            print(f"[evaluate] {_dt_name} column skipped — set "
+                  f"eval.{_dt_ckpt_key} to enable.")
+            continue
+        try:
+            from cpo_thermal_v2.baselines.decima_true import DecimaTrueScheduler
+        except ImportError as e:                              # pragma: no cover
+            print(f"[evaluate] DecimaTrueScheduler unavailable: {e}")
+            continue
+
+        # closure-capture name + ckpt for the factory
+        def _make_decima_true_factory(label: str, ckpt_path: str):
+            def factory(num_nodes: int, action_mode: str):
+                if action_mode != "auto_only":
+                    raise ValueError(
+                        f"{label} only runs in auto_only mode")
+                return DecimaTrueScheduler(
+                    ckpt_path     = ckpt_path,
+                    num_nodes     = num_nodes,
+                    deterministic = bool(eval_cfg.get("deterministic", True)),
+                    device        = eval_cfg.get("device", "cpu"),
+                )
+            # Override the BaseScheduler.name so emitted CSV rows
+            # carry the variant label (otherwise both vanilla and
+            # thermal would appear as "Decima").
+            factory.__name__ = f"_factory_{label}"
+            return factory
+
+        _factory = _make_decima_true_factory(_dt_name, _dt_ckpt)
+        # Wrap to override scheduler.name at instantiation time
+        def _named_factory(num_nodes, action_mode,
+                            _inner=_factory, _label=_dt_name):
+            sched = _inner(num_nodes, action_mode)
+            sched.name = _label
+            return sched
+        factories.append((_dt_name, _named_factory))
+        print(f"[evaluate] {_dt_name} registered from {_dt_ckpt}")
+
     # Trained PPO — three variants (auto_only / agent_only / hybrid),
     # all using the same checkpoint.  ``action_mode`` is honoured by
     # both the env and the model wrapper.

@@ -1,0 +1,45 @@
+# =====================================================================
+# eval_decima_true_hot.yaml — Decima true variants vs HEFT, HOT regime
+# =====================================================================
+# Runs three schedulers paired (seed_base=100000 matches all prior
+# Stage 2 / Decima validation eval CSVs so the §5 ablation chain can
+# be assembled from this CSV + existing stage2_v2_validation_stage1ckpt_hot
+# for the s1-auto Pareto anchor):
+#
+#   - HEFT            (baseline anchor)
+#   - Decima-vanilla  (makespan_only reward, V100 ckpt at step ≈312k)
+#   - Decima-thermal  (thermal_aware reward, V100 ckpt at step ≈312k)
+#
+# Mac CPU eval; no Ours scheduler in this run (s1-auto data already
+# captured under eval_results/stage2_v2_validation_stage1ckpt_hot/).
+#
+# N=17, hot ambient [60,75], 50 paired episodes — matches the Decima
+# training ambient distribution (their stress-curriculum sketch in
+# train_decima_true_*.yaml used the default curriculum, which spans
+# warm→hot; the published §5 result will quote hot since hot is the
+# regime where thermal-aware shaping is supposed to matter).
+# =====================================================================
+_inherit: default
+eval:
+  # Ours checkpoint_path is required by evaluate.py for the Ours
+  # factory check even though we disable Ours via scheduler_filter.
+  # Point it at stage1 best.pt so the file resolves; the filter keeps
+  # Ours-auto_only / Ours-hybrid out of the run.
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+
+  # Two Decima true ckpts — opt-in via the new HK-3.x fields
+  decima_true_vanilla_ckpt: "checkpoints/decima_true_vanilla_N17/best.pt"
+  decima_true_thermal_ckpt: "checkpoints/decima_true_thermal_N17/best.pt"
+
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired with s1-auto + Stage 2 eval CSVs
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter: [HEFT, "Decima-vanilla", "Decima-thermal"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/decima_true_validation_hot"
