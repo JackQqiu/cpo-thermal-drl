@@ -239,6 +239,16 @@ class CPOThermalDAGEnvV2(gym.Env):
         temp_rise_per_ms_oe:   float = 0.18,
         # ---- reward ----
         reward_config: Optional[RewardConfig] = None,
+        # ---- observation filter (Decima true Step 6) ----
+        # If set, _build_graph_obs returns a dict containing ONLY the
+        # listed keys plus mandatory structural keys (current_task_idx,
+        # num_uncompleted, task_id_order — needed for env-side bookkeeping
+        # and not interpretable as feature signal).  Used by Decima true
+        # to enforce that the policy never receives thermal observations,
+        # even when the reward channel is thermal_aware.
+        # ``None`` (default) = no filter; legacy schedulers see the full
+        # graph_obs dict unchanged.
+        observation_keys: Optional[List[str]] = None,
         # ---- RC matrices ----
         rc_matrix_dir: Optional[str] = None,
         rc_A: Optional[np.ndarray] = None,
@@ -315,6 +325,15 @@ class CPOThermalDAGEnvV2(gym.Env):
             T_pen=thermal_guardband,
             T_crit=thermal_critical,
             T_target=thermal_target,
+        )
+
+        # -------- observation filter (Decima true Step 6) --------
+        # None = no filter (legacy default).  When set, _build_graph_obs
+        # strips every key not in this list, except mandatory structural
+        # keys that env-side bookkeeping needs.  Used by Decima true to
+        # enforce blindness to thermal observations.
+        self.observation_keys: Optional[List[str]] = (
+            list(observation_keys) if observation_keys is not None else None
         )
 
         # -------- gym spaces --------
@@ -1062,7 +1081,7 @@ class CPOThermalDAGEnvV2(gym.Env):
             else 0
         )
 
-        return {
+        out: Dict[str, Any] = {
             "proc_x":           proc_x,
             "task_x":           task_x,
             "edges_t2t":        edges_t2t,
@@ -1075,6 +1094,17 @@ class CPOThermalDAGEnvV2(gym.Env):
             "task_id_order":    [str(t) for t in uncompleted],
             "num_uncompleted":  len(uncompleted),
         }
+
+        # Decima true Step 6 — observation filter.  Structural keys are
+        # always preserved; other keys survive only if listed in
+        # self.observation_keys.
+        if self.observation_keys is not None:
+            _STRUCTURAL = {"current_task_idx", "task_id_order",
+                           "num_uncompleted"}
+            keep = set(self.observation_keys) | _STRUCTURAL
+            out = {k: v for k, v in out.items() if k in keep}
+
+        return out
 
     # =================================================================
     # info dict assembly  (keeps legacy keys for train.py compatibility)

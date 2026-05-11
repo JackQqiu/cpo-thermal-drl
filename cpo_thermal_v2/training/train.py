@@ -749,6 +749,20 @@ def main() -> None:
 
     cfg = load_config(args.config)
     cfg = merge_cli_overrides(cfg, args.override)
+
+    # Algorithm dispatch (Decima true Step 5).  Default is PPO (the
+    # cfg-less branch); 'reinforce' defers to the Mao-style trainer in
+    # train_decima_true.  Add further algorithms here as needed.
+    algo = (cfg.get("training", {}) or {}).get("algorithm", "ppo").lower()
+    if algo == "reinforce":
+        from cpo_thermal_v2.training.train_decima_true import train_reinforce
+        train_reinforce(cfg)
+        return
+    if algo not in ("ppo", "default"):
+        raise ValueError(
+            f"Unknown training.algorithm={algo!r}. "
+            f"Supported: 'ppo' (default), 'reinforce'."
+        )
     train(cfg)
 
 

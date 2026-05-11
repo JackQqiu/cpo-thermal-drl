@@ -57,6 +57,21 @@ class RewardConfig:
 
     Defaults match the reconstruction plan; overridable per-curriculum-stage.
     """
+    # Reward dispatch mode (HK-1.5.10, Decima true Step 6)
+    # -----------------------------------------------------
+    # "thermal_aware" (default): full reward as designed for Ours / decima_fair —
+    #                            base_step + cooling_time_w + thermal walls +
+    #                            cool_avoid_bonus + cool_waste_pen + cool_node_bonus
+    #                            + dag_done + episode_done + truncate.
+    # "makespan_only"          : Mao 2019 faithful — drops every thermal term
+    #                            (no cooling_time_w, no soft/hard wall, no
+    #                            cool_*, no cool_node_bonus). Keeps base_step,
+    #                            dag_done_bonus, episode_done_bonus, truncate_pen
+    #                            so episode termination semantics are intact.
+    # See compute_reward / decompose_reward / compute_reward_channels for the
+    # branches; the same mode applies uniformly across all three entry points.
+    reward_mode:     str   = "thermal_aware"
+
     # Thermal thresholds
     T_pen:           float = 80.0    # soft wall (penalty kicks in above)
     T_crit:          float = 85.0    # hard wall (large fixed penalty)
@@ -164,6 +179,26 @@ def compute_reward(
     if truncated:
         return -float(cfg.truncate_pen)
 
+    # ----- reward_mode dispatch (HK-1.5.10 / Decima true Step 6) -----
+    # Mao 2019's original Decima used a slowdown/makespan reward.  In
+    # our env's units the closest equivalent is base_step + dag_done +
+    # episode_done + truncate (already handled).  All thermal terms
+    # (soft/hard wall, cool_*, cooling_time_w, cool_node) are dropped.
+    # The agent receives no thermal feedback at all in this mode —
+    # exactly the "vanilla" baseline the §5 ablation cube requires.
+    if cfg.reward_mode == "makespan_only":
+        r = float(cfg.base_step_reward)
+        # Hard wall still fires (it's a termination-class penalty, like
+        # truncate, just one-shot rather than episode-ending in soft mode).
+        if max_temp_during > cfg.T_crit:
+            r -= float(cfg.hard_wall_pen)
+        if dag_done:
+            r += float(cfg.dag_done_bonus)
+        if episode_done:
+            r += float(cfg.episode_done_bonus)
+        return float(r)
+
+    # ----- thermal_aware (default Ours / decima_fair path) -----
     r = float(cfg.base_step_reward)
 
     # 2. Makespan penalty — saturating per-step.
@@ -255,6 +290,19 @@ def decompose_reward(
     if truncated:
         components["truncate"] = -float(cfg.truncate_pen)
         components["total"]    = components["truncate"]
+        return components
+
+    # makespan_only mode: zero out all thermal components for logging
+    # parity with compute_reward.
+    if cfg.reward_mode == "makespan_only":
+        components["base"]      = float(cfg.base_step_reward)
+        if max_temp_during > cfg.T_crit:
+            components["hard_wall"] = -float(cfg.hard_wall_pen)
+        if dag_done:
+            components["dag_bonus"] = float(cfg.dag_done_bonus)
+        if episode_done:
+            components["episode_bonus"] = float(cfg.episode_done_bonus)
+        components["total"] = sum(v for k, v in components.items() if k != "total")
         return components
 
     components["base"] = float(cfg.base_step_reward)
