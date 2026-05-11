@@ -243,31 +243,90 @@ class HGATEActorCritic(nn.Module):
         proc_in_dim:    int = 7,
     ):
         super().__init__()
-        self.num_procs = int(num_procs)
-        # TODO checklist Step 2:
-        #   - self.encoder = HGATEEncoder(task_in_dim, proc_in_dim,
-        #                                 hidden_dim, num_gat_layers,
-        #                                 num_heads)
-        #   - self.actor = MLP(hidden_dim -> hidden_dim -> num_procs)
-        #     (note: actor projects pooled proc_embs to num_procs, NOT
-        #      to a single scalar — pool removes per-proc identity, so
-        #      the MLP must reconstruct it; alternative is to project
-        #      each proc_emb to scalar and stack, see checklist note)
-        #   - self.critic = MLP(hidden_dim -> hidden_dim -> 1)
-        raise NotImplementedError(
-            "see hgate_ppo_checklist.md Step 2 — actor + critic heads"
+        self.hidden_dim = int(hidden_dim)
+        # ``num_procs`` is informational — the actor's per-pair scorer is
+        # N-agnostic by construction (Decision 1, Path B) so no learnable
+        # layer binds to N.  Stored for diagnostic consistency with the
+        # eval-time scheduler's ctor.
+        self.num_procs  = int(num_procs)
+
+        self.encoder = HGATEEncoder(
+            task_in_dim    = task_in_dim,
+            proc_in_dim    = proc_in_dim,
+            hidden_dim     = hidden_dim,
+            num_layers     = num_gat_layers,
+            num_heads      = num_heads,
         )
 
-    def forward(self, graph_obs: Dict[str, Any],
-                action_mask: np.ndarray):
-        """Return ``(logits, value)``.  Shapes: (N_proc,), ()."""
-        # TODO checklist Step 2:
-        #   1. task_embs, proc_embs = self.encoder(graph_obs)
-        #   2. logits = self.actor(scoring_input(proc_embs))
-        #   3. value  = self.critic(global_pool([task_embs, proc_embs]))
-        raise NotImplementedError(
-            "see hgate_ppo_checklist.md Step 2 — forward"
+        # Per-pair scorer (checklist Decision 1, Path B).  For each
+        # processor i, compute score_i = MLP([global_ctx, proc_emb_i]).
+        # Input dim = 2 * hidden_dim (concat of global context and the
+        # proc's own embedding).  N-agnostic — the same MLP applies at
+        # any N.
+        self.actor_score = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
+
+        # Single scalar critic (Wu 2025 §3.4).  Operates on the pooled
+        # global context only; NOT dual placement/delay (that's Ours,
+        # which uses a factored cross-attention actor with two heads).
+        self.critic = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(
+        self,
+        graph_obs:   Dict[str, Any],
+        action_mask: np.ndarray,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(logits, value)``.
+
+        Shapes
+        ------
+        logits : (N_proc,)   — per-processor scores, **unmasked**.  The
+                                caller (`act()` in Step 3) applies the
+                                action mask before softmax.
+        value  : ()          — scalar critic V(s).
+
+        Implementation
+        --------------
+        1. encode graph_obs -> (task_embs[T,H], proc_embs[P,H])
+        2. global context = mean-pool over all node embeddings
+        3. per-proc logits = actor_score([global_ctx, proc_emb_i])
+        4. value = critic(global_ctx)
+        """
+        device = next(self.parameters()).device
+        task_embs, proc_embs = self.encoder(graph_obs)
+
+        # Global context = mean-pool over all node embeddings.  Guard
+        # against the degenerate empty-graph case (env always has N
+        # procs ≥ 1 so this rarely triggers, but the guard keeps the
+        # forward total-function).
+        all_embs = torch.cat([task_embs, proc_embs], dim=0)
+        if all_embs.shape[0] == 0:
+            global_ctx = torch.zeros(self.hidden_dim, device=device)
+        else:
+            global_ctx = all_embs.mean(dim=0)         # (H,)
+
+        # Per-pair scoring: broadcast global_ctx across procs, concat
+        # with each proc's own embedding, run the shared scorer.
+        P = proc_embs.shape[0]
+        if P == 0:
+            # Defensive: emit zeros so the caller's masking still works.
+            logits = torch.zeros(0, device=device)
+        else:
+            ctx_repeat = global_ctx.unsqueeze(0).expand(P, -1)   # (P, H)
+            pair_input = torch.cat([ctx_repeat, proc_embs], dim=1)  # (P, 2H)
+            logits = self.actor_score(pair_input).squeeze(-1)    # (P,)
+
+        # Critic — collapse (1,) -> () for the scalar contract
+        value = self.critic(global_ctx).squeeze(-1)              # ()
+
+        return logits, value
 
     def act(
         self,

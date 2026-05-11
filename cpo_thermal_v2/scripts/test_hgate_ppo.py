@@ -211,6 +211,118 @@ def test_step1_drops_rc_edge_attribute() -> None:
 
 
 # =====================================================================
+# Step 2 — HGATEActorCritic (__init__ + forward)
+# =====================================================================
+def test_step2_init_attaches_encoder_actor_critic() -> None:
+    """__init__ wires HGATEEncoder + actor scorer + critic head."""
+    m = HGATEActorCritic(hidden_dim=64, num_procs=5,
+                          num_heads=2, num_gat_layers=2,
+                          task_in_dim=8, proc_in_dim=7)
+    assert hasattr(m, "encoder"), "ActorCritic must expose .encoder"
+    assert isinstance(m.encoder, HGATEEncoder), \
+        f"encoder type wrong: {type(m.encoder).__name__}"
+    assert m.encoder.hidden_dim == 64
+    assert m.encoder.num_layers == 2
+    assert m.encoder.num_heads == 2
+    assert hasattr(m, "actor_score"), \
+        "ActorCritic must expose .actor_score (Decision 1: per-pair Path B)"
+    assert hasattr(m, "critic"), \
+        "ActorCritic must expose .critic (single scalar value head)"
+
+
+def test_step2_actor_score_input_dim_is_two_hidden() -> None:
+    """Path B per-pair scorer: input is [global_ctx, proc_emb_i] -> 2*hidden_dim."""
+    hidden_dim = 64
+    m = HGATEActorCritic(hidden_dim=hidden_dim, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    # Find the first Linear inside actor_score; its in_features must be
+    # 2 * hidden_dim per Decision 1 (per-pair scoring).
+    linears = [mod for mod in m.actor_score.modules()
+               if isinstance(mod, torch.nn.Linear)]
+    assert len(linears) >= 1, "actor_score has no Linear layers"
+    assert linears[0].in_features == 2 * hidden_dim, (
+        f"actor_score first Linear in_features = {linears[0].in_features}, "
+        f"expected 2*{hidden_dim} = {2*hidden_dim} (per Decision 1: per-pair "
+        f"scoring takes [global_ctx, proc_emb_i])")
+    assert linears[-1].out_features == 1, (
+        f"actor_score final out_features = {linears[-1].out_features}, "
+        f"expected 1 (one scalar per processor)")
+
+
+def test_step2_critic_is_single_scalar_head() -> None:
+    """Single-value critic — NOT dual placement/delay (that's Ours)."""
+    hidden_dim = 64
+    m = HGATEActorCritic(hidden_dim=hidden_dim, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    linears = [mod for mod in m.critic.modules()
+               if isinstance(mod, torch.nn.Linear)]
+    assert len(linears) >= 1, "critic has no Linear layers"
+    assert linears[0].in_features == hidden_dim, (
+        f"critic first Linear in_features = {linears[0].in_features}, "
+        f"expected {hidden_dim} (operates on pooled global context)")
+    assert linears[-1].out_features == 1, (
+        f"critic final out_features = {linears[-1].out_features}, "
+        f"expected 1 (single value head — Wu 2025 spec, not dual critic)")
+
+
+def test_step2_forward_logits_and_value_shape() -> None:
+    """forward(obs, mask) returns (logits[N_proc], value[scalar]), both finite."""
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=1)
+    obs  = _make_dummy_obs(N_task=6, N_proc=5)
+    mask = np.array([True] * 5, dtype=bool)
+    logits, value = m.forward(obs, mask)
+    assert isinstance(logits, torch.Tensor), \
+        f"logits type wrong: {type(logits).__name__}"
+    assert isinstance(value, torch.Tensor), \
+        f"value type wrong: {type(value).__name__}"
+    assert logits.shape == (5,), \
+        f"logits.shape = {tuple(logits.shape)}, expected (5,)"
+    # value must collapse to scalar (shape ()) per checklist Step 2 acceptance
+    assert value.dim() == 0 or value.shape == torch.Size([1]) or value.numel() == 1, (
+        f"value must be scalar; got shape {tuple(value.shape)}, numel={value.numel()}")
+    assert torch.isfinite(logits).all(), "logits contain non-finite values"
+    assert torch.isfinite(value).all(), "value is non-finite"
+
+
+def test_step2_gradient_flow_through_full_actor_critic() -> None:
+    """backward through (logits.sum() + value) populates grads on every param,
+    including the encoder (no broken graph through Path B scoring)."""
+    m = HGATEActorCritic(hidden_dim=32, num_procs=5,
+                          num_heads=2, num_gat_layers=2)
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([True] * 5, dtype=bool)
+    logits, value = m.forward(obs, mask)
+    loss = logits.sum() + value.sum()    # .sum() collapses scalar or (1,)
+    loss.backward()
+    missing = [n for n, p in m.named_parameters()
+               if p.requires_grad and p.grad is None]
+    assert not missing, (
+        f"params with no grad after backward: {missing[:5]}"
+        f"{' ...' if len(missing) > 5 else ''}")
+
+
+def test_step2_actor_critic_respects_meta_device() -> None:
+    """HK-3.1.1 carryover applied to the new heads: moving the whole
+    ActorCritic to 'meta' must not surface the pre-fix cpu-leak error."""
+    m = HGATEActorCritic(hidden_dim=16, num_procs=5,
+                          num_heads=2, num_gat_layers=1).to("meta")
+    assert next(m.parameters()).device.type == "meta"
+    obs  = _make_dummy_obs(N_task=4, N_proc=5)
+    mask = np.array([True] * 5, dtype=bool)
+    try:
+        logits, value = m.forward(obs, mask)
+    except RuntimeError as e:
+        assert _PRE_FIX_ERROR not in str(e), (
+            f"actor-critic has CPU-tensor leak (HK-3.1.1 signature):\n  {e}")
+        return
+    assert logits.device.type == "meta", \
+        f"logits.device = {logits.device}, expected meta"
+    assert value.device.type == "meta", \
+        f"value.device = {value.device}, expected meta"
+
+
+# =====================================================================
 # Device discipline regression tests (HK-3.1.1 pattern, carried over)
 # =====================================================================
 _PRE_FIX_ERROR = "not on the expected device cpu"
@@ -264,6 +376,14 @@ def main() -> int:
     _run("forward: output shape + finiteness",       test_step1_forward_output_shape)
     _run("forward: gradient flows to all params",    test_step1_gradient_flow)
     _run("adapter: drops RC edge attr + p2p edges",  test_step1_drops_rc_edge_attribute)
+
+    print("\n-- Step 2: HGATEActorCritic (__init__ + forward) --")
+    _run("init: encoder + actor_score + critic attached", test_step2_init_attaches_encoder_actor_critic)
+    _run("init: actor_score input dim = 2*hidden (Path B)", test_step2_actor_score_input_dim_is_two_hidden)
+    _run("init: critic is single scalar head",            test_step2_critic_is_single_scalar_head)
+    _run("forward: (logits, value) shapes + finiteness",  test_step2_forward_logits_and_value_shape)
+    _run("forward: gradient flows through full ActorCritic", test_step2_gradient_flow_through_full_actor_critic)
+    _run("ActorCritic respects meta device (no cpu leak)", test_step2_actor_critic_respects_meta_device)
 
     print("\n-- Device discipline (HK-3.1.1 carryover) --")
     _run("encoder respects meta device (no cpu leak)", test_encoder_respects_meta_device)
