@@ -2,12 +2,11 @@
 #SBATCH --job-name=hgate_ppo
 #SBATCH --account=yanjia
 #SBATCH --partition=a100x4
-#SBATCH --gres=gpu:4                       # cluster CPU-per-GPU policy:
-                                           # `gpu` partition: max 5 cpus/gpu
-                                           # `a100x4`       : 16 cpus needs 4 gpus
-                                           # we use cuda:0 only; the other 3
-                                           # A100s sit idle (unavoidable cost
-                                           # of the partition's CPU quota tying)
+#SBATCH --gres=gpu:1                       # cluster CPU-per-GPU policy:
+                                           # `gpu` partition: 5 cpus per gpu
+                                           # `a100x4`       : 16 cpus per gpu
+                                           # one A100 gives us 16 real cores,
+                                           # no need to over-claim GPUs
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16                 # 16 worker processes for num_envs=16
 #SBATCH --mem=64G
