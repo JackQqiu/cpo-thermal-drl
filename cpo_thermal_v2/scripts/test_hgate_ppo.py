@@ -807,6 +807,131 @@ def test_step5perf_act_batched_mask_honored_stochastic() -> None:
 
 
 # =====================================================================
+# Step 6 (HK-4.6) — best.pt rolling-mean gate (replaces broken max-of-rollout)
+# =====================================================================
+# HK-4.5.0..HK-4.5.8 used `if max(ep_returns_collected) > best_ep_ret` to
+# gate best.pt saves. On the curriculum (cold→warm→hot) this locked best.pt
+# at the first lucky cold-stage episode and never updated again, because
+# hot-stage returns are systematically lower (more thermal violations →
+# lower ep returns). HK-4.5 V100 pilot best.pt got stuck at step 397k with
+# ep_ret_mean=+859 from cold stage; subsequent 500k+ steps of hot-stage
+# training never produced a single episode exceeding +859.
+#
+# HK-4.6 replaces the gate with a rolling-50-episode mean. This is the
+# standard PPO-recipe convention: the gate compares the policy's recent
+# average, not its lucky-best per-rollout episode.
+# =====================================================================
+def test_step6_best_ckpt_rolling_mean_gate_first_save() -> None:
+    """First save fires once we have window=50 episodes with finite returns.
+    Before that, the gate must not save (otherwise an early lucky single ep
+    locks best.pt prematurely)."""
+    from cpo_thermal_v2.training.train_hgate_ppo import _update_best_ckpt
+
+    # 1..49 episodes: should NOT save (window not full)
+    for n_eps in range(1, 50):
+        rolling = [10.0] * n_eps  # constant returns
+        new_best, should_save = _update_best_ckpt(
+            rolling_returns=rolling,
+            best_so_far=-float("inf"),
+            window=50,
+        )
+        assert not should_save, (
+            f"early-save bug returned at {n_eps} episodes; gate should "
+            f"refuse until window=50 is full")
+        assert new_best is None
+
+    # 50 episodes: first save fires
+    rolling = [10.0] * 50
+    new_best, should_save = _update_best_ckpt(
+        rolling_returns=rolling,
+        best_so_far=-float("inf"),
+        window=50,
+    )
+    assert should_save, "first save did not fire at episode 50"
+    assert new_best == 10.0, f"first save new_best = {new_best}, expected 10.0"
+
+
+def test_step6_best_ckpt_rolling_mean_gate_max_of_rollout_resistant() -> None:
+    """Simulate the cold-stage lock-in bug we saw in HK-4.5 V100 pilot.
+    Curriculum-like trajectory: 50 cold returns at ~+850 then 100 hot
+    returns at ~+500. The OLD max-of-rollout gate would lock best.pt at
+    +850 and never update. The NEW rolling-mean gate should update best.pt
+    multiple times during the cold phase, then refuse to update during
+    the hot phase (since rolling mean has dropped below the cold-stage
+    best). At the same time, the cold-stage best should reflect the
+    cold-stage mean (~+850), NOT a single lucky outlier."""
+    from cpo_thermal_v2.training.train_hgate_ppo import _update_best_ckpt
+
+    # Simulate 50 cold episodes at +850 ± 50
+    rng = np.random.default_rng(0)
+    cold = (rng.standard_normal(50) * 50 + 850).tolist()
+    # Simulate 100 hot episodes at +500 ± 100 (lower mean, harder regime)
+    hot = (rng.standard_normal(100) * 100 + 500).tolist()
+
+    rolling: List[float] = []
+    best_so_far = -float("inf")
+    save_events: List[Tuple[int, float, str]] = []   # (ep_idx, new_best, stage)
+    for i, ep_ret in enumerate(cold, start=1):
+        rolling.append(ep_ret)
+        new_best, should_save = _update_best_ckpt(
+            rolling_returns=rolling, best_so_far=best_so_far, window=50)
+        if should_save:
+            best_so_far = new_best
+            save_events.append((i, new_best, "cold"))
+    n_cold_saves = len(save_events)
+    cold_final_best = best_so_far
+
+    for i, ep_ret in enumerate(hot, start=51):
+        rolling.append(ep_ret)
+        new_best, should_save = _update_best_ckpt(
+            rolling_returns=rolling, best_so_far=best_so_far, window=50)
+        if should_save:
+            best_so_far = new_best
+            save_events.append((i, new_best, "hot"))
+    n_hot_saves = len(save_events) - n_cold_saves
+
+    # Cold stage: at least 1 save (the first save at episode 50).  Could be
+    # more if the rolling-50 mean drifted upward during the cold stage.
+    assert n_cold_saves >= 1, (
+        f"cold stage produced {n_cold_saves} saves, expected at least 1 "
+        f"(the first save at episode 50)")
+
+    # Hot stage: 0 saves, because hot-stage returns (~+500) drag the
+    # rolling-50 mean below the cold-stage best (~+850).  This is what
+    # the OLD max-of-rollout gate also did, but for the wrong reason
+    # (the OLD gate compared raw max which got lucky at single hot eps).
+    assert n_hot_saves == 0, (
+        f"hot stage produced {n_hot_saves} saves; should be 0 since rolling "
+        f"mean of hot eps (~+500) is below cold best (~{cold_final_best:.0f})")
+
+    # The locked cold best should be roughly the cold-stage mean
+    # (mean=850, std=50, n=50 → ~±10 sample noise on the mean estimator).
+    assert 800 < cold_final_best < 900, (
+        f"cold-stage best={cold_final_best:.1f}, expected ~850 ± 30; the "
+        f"rolling-mean gate should NOT be capturing individual lucky outliers")
+
+
+def test_step6_best_ckpt_window_smaller_than_returns() -> None:
+    """If the rolling-returns list is longer than window, only the last
+    `window` should be averaged.  Past long-ago values must not influence
+    the gate (the policy might have improved a lot since then)."""
+    from cpo_thermal_v2.training.train_hgate_ppo import _update_best_ckpt
+
+    # 1000 returns, but only last 50 are good (+1000), rest are bad (-1000)
+    bad = [-1000.0] * 950
+    good = [1000.0] * 50
+    rolling = bad + good
+
+    new_best, should_save = _update_best_ckpt(
+        rolling_returns=rolling, best_so_far=-float("inf"), window=50)
+    assert should_save, "rolling-mean gate did not honour window=50"
+    assert 900 < new_best < 1100, (
+        f"new_best={new_best:.1f}, expected ~1000 (mean of last 50). "
+        f"If this returns ~0 the function is averaging the whole list, "
+        f"not just the window.")
+
+
+# =====================================================================
 # Device discipline regression tests (HK-3.1.1 pattern, carried over)
 # =====================================================================
 _PRE_FIX_ERROR = "not on the expected device cpu"
@@ -898,6 +1023,14 @@ def main() -> int:
           test_step5perf_act_batched_deterministic_matches_sequential)
     _run("act_batched stochastic respects per-env masks",
           test_step5perf_act_batched_mask_honored_stochastic)
+
+    print("\n-- Step 6 (HK-4.6): best.pt rolling-mean gate --")
+    _run("best.pt fires first save at window=50 not earlier",
+          test_step6_best_ckpt_rolling_mean_gate_first_save)
+    _run("best.pt rolling-mean resists max-of-rollout lock-in",
+          test_step6_best_ckpt_rolling_mean_gate_max_of_rollout_resistant)
+    _run("best.pt window honoured even with long history",
+          test_step6_best_ckpt_window_smaller_than_returns)
 
     print("\n-- Device discipline (HK-3.1.1 carryover) --")
     _run("encoder respects meta device (no cpu leak)", test_encoder_respects_meta_device)

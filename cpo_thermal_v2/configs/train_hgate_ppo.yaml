@@ -1,21 +1,45 @@
 # =====================================================================
 # train_hgate_ppo.yaml — HGATE-PPO (Wu 2025 IEEE IoT Journal) baseline
 # =====================================================================
-# Status (HK-4.5): UNBLOCKED.  Code support shipped:
-#   HK-4.1  HGATEEncoder + adapter
-#   HK-4.2  HGATEActorCritic actor + critic heads
-#   HK-4.3  act() + get_value()
-#   HK-4.4  train.py dispatch + HGATEPPOScheduler + 100-step Mac smoke PASS
-#   HK-3.1.4 evaluation/evaluate.py registration
+# Status (HK-4.6): retrain config after HK-4.5 V100 pilot ckpt_ep_012400
+# (~909k steps) eval showed peak_T ~ HEFT (no thermal-awareness signal).
+#
+# Wu 2025 Table IV (paper page 13, authoritative) — HK-4.6.1:
+#   The user provided Wu 2025 Table IV directly (we'd previously been
+#   blocked by IEEE Xplore HTTP 418 + a code-empty official GitHub).
+#   HK-4.6.1 pins three hyper-params to the Table IV authoritative
+#   values and keeps the other nine consistent with Wu 2025 + Ours
+#   defaults for the unspecified entries:
+#
+#     Wu 2025 Table IV authoritative:
+#       learning_rate    = 2e-4              (Fig 4 sweet spot)
+#       entropy_coef     = 0.01              (Wu's c2)
+#       gae_lambda       = 0.98
+#       heads            = 4
+#       num_gat_layers   = 2
+#       value_coef       = 0.5               (Wu's c1)
+#       clip_eps         = 0.2
+#       gamma            = 0.99
+#       ppo_epochs       = 4                 (Wu's K)
+#
+#     Wu 2025 unspecified — Ours stage 1 fallback (per task spec):
+#       minibatch_size   = 64
+#       rollout_length   = 256
+#       num_envs         = 16
+#
+# HK-4.6 rationale (preserved): the rolling-50-episode best.pt gate in
+# train_hgate_ppo.py replaces the broken max-of-rollout gate that locked
+# best.pt at a single cold-stage lucky episode during the HK-4.5 V100
+# pilot (best.pt was pinned at step 397k forever).
+#
+# HK-4.6 best.pt fix:
+#   - train_hgate_ppo.py now uses a rolling-50-episode mean gate for
+#     best.pt instead of `max(per-rollout-episodes)`.  The old gate
+#     locked best.pt at the first lucky cold-stage episode (step 397k,
+#     ep_ret_mean=+859) and never updated.
 #
 # §5 ablation chain isolation point:
-#   Ours-NoThermal  --(strip RC edge + cross-attention)-->  HGATE-PPO
-#
-# Hyper-params: Wu 2025 §4.  num_envs and minibatch_size are inherited
-# from the dual-channel PPO trainer's defaults but the current HGATE
-# trainer (train_hgate_ppo.py) is single-env / per-step PPO update —
-# these keys are silently ignored by the HGATE trainer until a
-# multi-env refactor lands.  See sbatch header for wallclock implications.
+#   Ours-auto_only  --(strip RC edge + cross-attention)-->  HGATE-PPO
 # =====================================================================
 _inherit: default
 
@@ -23,14 +47,14 @@ training:
   algorithm:        ppo
   device:           cuda             # HK-3.1.1: explicit V100 anchor
   total_steps:      5_000_000        # match Ours stage 1 budget
-  num_envs:         16               # mirror Ours stage 1 async batch
+  num_envs:         16               # Ours stage 1 async batch
   rollout_length:   256
-  learning_rate:    3.0e-4           # Wu 2025 default
-  clip_eps:         0.2
-  value_coef:       0.5
-  entropy_coef:     0.01
-  gae_lambda:       0.95
-  gamma:            0.99
+  learning_rate:    2.0e-4           # Wu 2025 Table IV (Fig 4 sweet spot)
+  clip_eps:         0.2              # Wu 2025 Table IV
+  value_coef:       0.5              # Wu 2025 Table IV (c1)
+  entropy_coef:     0.01             # Wu 2025 Table IV (c2)
+  gae_lambda:       0.98             # Wu 2025 Table IV
+  gamma:            0.99             # Wu 2025 Table IV
   ppo_epochs:       4
   minibatch_size:   64
 

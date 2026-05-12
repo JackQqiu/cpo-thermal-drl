@@ -534,6 +534,13 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
     _obs, info   = vec_env.reset(seed=seed_base)
     episode_returns_buffer = np.zeros(num_envs, dtype=np.float64)
 
+    # HK-4.6: rolling-50 episode-return history for the best.pt gate.
+    # The OLD `if max(ep_returns_collected) > best_ep_ret` gate locked
+    # best.pt at the first lucky cold-stage episode and never updated
+    # again.  The rolling-mean gate averages out single-episode noise.
+    rolling_ep_returns: List[float] = []
+    _BEST_CKPT_WINDOW = 50
+
     if _HGATE_PROFILE:
         print("[train_hgate_ppo] HGATE_PROFILE=1 — per-phase timing enabled "
               "(rollout: model_act / env_step / info_extract; "
@@ -635,16 +642,27 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
                   f"update={_update_total_s*1000:6.0f}ms / "
                   f"{_pct(_update_total_s):4.1f}%")
 
-        # ----- checkpointing -----
+        # ----- checkpointing (HK-4.6: rolling-mean gate replaces max-of-rollout) -----
         if ep_returns_collected:
-            ep_ret = max(ep_returns_collected)
-            if ep_ret > best_ep_ret:
-                best_ep_ret = ep_ret
+            rolling_ep_returns.extend(ep_returns_collected)
+
+            new_best, should_save = _update_best_ckpt(
+                rolling_returns=rolling_ep_returns,
+                best_so_far=best_ep_ret,
+                window=_BEST_CKPT_WINDOW,
+            )
+            if should_save:
+                best_ep_ret = new_best  # type: ignore[assignment]
                 _save_ckpt(ckpt_dir / "best.pt", model, optimizer,
-                            global_step, ep_ret)
+                            global_step, best_ep_ret)
+                print(f"  [save] best.pt updated: "
+                      f"moving_avg({_BEST_CKPT_WINDOW} eps)={best_ep_ret:+.2f} "
+                      f"at episode {episode_idx}, step {global_step:,}")
+
             if episode_idx % save_every_eps == 0:
                 _save_ckpt(ckpt_dir / f"ckpt_ep_{episode_idx:06d}.pt",
-                            model, optimizer, global_step, ep_ret)
+                            model, optimizer, global_step,
+                            float(np.mean(ep_returns_collected)))
 
     # final
     _save_ckpt(ckpt_dir / "final.pt", model, optimizer,
@@ -653,6 +671,50 @@ def train_hgate_ppo(cfg: Dict[str, Any]) -> None:
         writer.close()
     print(f"[train_hgate_ppo] done — episodes={episode_idx}  "
           f"global_step={global_step:,}  best_ep_return={best_ep_ret:+.2f}")
+
+
+def _update_best_ckpt(
+    rolling_returns: List[float],
+    best_so_far:     float,
+    window:          int = 50,
+) -> Tuple[Optional[float], bool]:
+    """Decide whether to save best.pt based on rolling-mean episode return.
+
+    HK-4.6 fix: the prior gate (``if max(ep_returns_collected) > best_so_far``)
+    was vulnerable to early lock-in.  At the start of the cold curriculum
+    stage, a single lucky cold-stage episode could push ``best_so_far`` to
+    a value subsequently-unreachable in the warm/hot stages (which have
+    systematically lower per-episode returns due to thermal-violation
+    truncation).  Once locked, best.pt stayed pinned at the early cold
+    checkpoint and never reflected the actual training progress.
+
+    The fix: gate on the rolling-``window``-episode mean (default 50).  This
+    is statistically meaningful (averages out single-episode noise) and
+    monotone with sustained policy improvement.  The gate refuses to save
+    until ``len(rolling_returns) >= window`` to prevent a small-sample
+    early save with the same lock-in risk.
+
+    Parameters
+    ----------
+    rolling_returns : list of per-episode returns collected so far (in
+        order). Only the last ``window`` are used.
+    best_so_far : the moving-average value of the currently-saved best.pt
+        (``-inf`` before the first save).
+    window : trailing episodes used for the mean.  ``50`` matches the
+        Ours PPO trainer recipe.
+
+    Returns
+    -------
+    (new_best, should_save) :
+        ``new_best`` is the new moving-average value when ``should_save``
+        is True, else ``None``.
+    """
+    if len(rolling_returns) < window:
+        return None, False
+    moving_avg = float(np.mean(rolling_returns[-window:]))
+    if moving_avg > best_so_far:
+        return moving_avg, True
+    return None, False
 
 
 def _save_ckpt(
