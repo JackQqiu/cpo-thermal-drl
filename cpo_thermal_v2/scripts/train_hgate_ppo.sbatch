@@ -1,13 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=hgate_ppo
 #SBATCH --account=yanjia
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
+#SBATCH --partition=a100x4
+#SBATCH --gres=gpu:4                       # cluster CPU-per-GPU policy:
+                                           # `gpu` partition: max 5 cpus/gpu
+                                           # `a100x4`       : 16 cpus needs 4 gpus
+                                           # we use cuda:0 only; the other 3
+                                           # A100s sit idle (unavoidable cost
+                                           # of the partition's CPU quota tying)
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=16                 # 16 worker processes for num_envs=16
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00                  # 24h — single-env PPO ~50-80 step/s
-                                           # 5M steps ~= 17-20h wallclock
+#SBATCH --time=24:00:00                    # 24h cap; with TRUE 16 cores (not
+                                           # the 5 we got on `gpu` partition)
+                                           # expect ~120 step/s → 5M ≈ 12h
 #SBATCH --output=logs/hgate_ppo_%j.out
 #SBATCH --error=logs/hgate_ppo_%j.err
 # -------------------------------------------------------------------

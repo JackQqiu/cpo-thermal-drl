@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=hgate_prof
 #SBATCH --account=yanjia
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
+#SBATCH --partition=a100x4
+#SBATCH --gres=gpu:4                       # cluster policy: 16 cpus requires
+                                           # 4 a100s.  trainer uses cuda:0 only.
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
