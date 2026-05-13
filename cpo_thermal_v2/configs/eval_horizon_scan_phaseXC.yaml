@@ -1,0 +1,63 @@
+# =====================================================================
+# eval_horizon_scan_phaseXC.yaml — Phase X-C horizon sensitivity
+# =====================================================================
+# Drives paper §5.4 horizon-sensitivity figure (Fig 4 in current draft;
+# may be renumbered in Phase G).
+#
+# 4 horizon values × N=17 × HOT × 500 ep × 9 schedulers.
+# Throttled-HEFT-hybrid runs in a sibling yaml since hybrid mode
+# requires action_mode_list: [hybrid].
+#
+# Horizon = dags_per_episode (number of DAGs queued per episode).
+# Tests whether thermal-aware policies scale with workload depth.
+#
+# Eval pipeline iterates over num_nodes_list × action_mode_list × scheds
+# but NOT dags_per_episode_list. To sweep horizons, run via the driver:
+#   sh cpo_thermal_v2/scripts/eval_horizon_scan_phaseXC.sh
+# which calls this yaml 4 times with --override eval.dags_per_episode=H
+# for H in {20, 50, 100, 200}.
+#
+# Mac CPU wallclock estimate: ~3-4h.  Will be re-estimated from
+# Phase X-A timing data.
+#
+# Distinct from legacy `eval_horizon_scan_v3.yaml` (different seed_base,
+# different scheduler set — that was for stage2 hybrid+fair-Decima).
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+
+  decima_true_vanilla_ckpt: "checkpoints/decima_true_vanilla_N17/best.pt"
+  decima_true_thermal_ckpt: "checkpoints/decima_true_thermal_N17/best.pt"
+
+  hgate_ppo_ckpt:        "checkpoints/hgate_ppo_N17/best.pt"
+  hgate_hidden_dim:       128
+  hgate_num_gat_layers:     2
+  hgate_num_heads:          4
+
+  decima_xattn_ckpt:        "checkpoints/decima_xattn_N17/best.pt"
+  decima_xattn_hidden_dim:       128
+  decima_xattn_num_gcn_layers:     4
+  decima_xattn_num_heads:          4
+
+  num_episodes:    500
+  deterministic:   true
+  seed_base:       100000             # paired with Phase X-A/B
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter:
+    - HEFT
+    - ThermalHEFT
+    - RoundRobin
+    - Throttled-HEFT-agent_only
+    - Decima-vanilla
+    - Decima-thermal
+    - "HGATE-PPO"
+    - "D2"
+    - Ours-auto_only
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]    # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20              # overridden by driver
+  output_dir: "eval_results/horizon_scan_phaseXC/h20"

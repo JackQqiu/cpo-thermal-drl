@@ -1,0 +1,47 @@
+# =====================================================================
+# eval_main_6way_hot_n17_cuda.yaml — Phase X-A on A100 (cuda variant)
+# =====================================================================
+# Same eval grid as eval_main_6way_hot_n17.yaml but device=cuda so neural
+# scheduler forwards (Decima-v/t, HGATE-PPO, D2, Ours-auto_only) run on
+# GPU rather than CPU.  Used as timing baseline before kicking off
+# Phase X-B (100k ep grand matrix) on the server.
+#
+# Why a separate yaml not --override:
+# device propagation in evaluate.py touches every neural scheduler
+# factory; pinning it via yaml is clearer than overriding 5× at CLI.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+
+  decima_true_vanilla_ckpt: "checkpoints/decima_true_vanilla_N17/best.pt"
+  decima_true_thermal_ckpt: "checkpoints/decima_true_thermal_N17/best.pt"
+
+  hgate_ppo_ckpt:        "checkpoints/hgate_ppo_N17/best.pt"
+  hgate_hidden_dim:       128
+  hgate_num_gat_layers:     2
+  hgate_num_heads:          4
+
+  decima_xattn_ckpt:        "checkpoints/decima_xattn_N17/best.pt"
+  decima_xattn_hidden_dim:       128
+  decima_xattn_num_gcn_layers:     4
+  decima_xattn_num_heads:          4
+
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000
+  device:          cuda                    # <-- cuda (A100) vs cpu (Mac)
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter:
+    - HEFT
+    - Decima-vanilla
+    - Decima-thermal
+    - "HGATE-PPO"
+    - "D2"
+    - Ours-auto_only
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/main_6way_hot_n17_cuda"

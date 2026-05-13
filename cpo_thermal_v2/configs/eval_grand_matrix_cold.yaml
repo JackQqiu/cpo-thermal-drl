@@ -1,0 +1,70 @@
+# =====================================================================
+# eval_grand_matrix.yaml — Phase X-B paper §5 grand scaling matrix (HOT)
+# =====================================================================
+# CLAUDE.md Stage 5 original scope: 10 schedulers × 5 N × 500 ep paired.
+# This yaml covers the HOT-ambient slice only — ambient sweep (cold /
+# warm / extreme) uses 3 sibling yamls + a shell driver
+# (`cpo_thermal_v2/scripts/eval_grand_matrix.sh`).
+#
+# HOT slice deliverables:
+#   - Paper §5 main table (slice at N=17)
+#   - Paper §5 scaling figure (N sweep, HOT)
+#   - Holm-Bonferroni 5-link chain (slice at N=17 HOT 500 ep)
+#
+# Mac CPU wallclock estimate (HOT slice alone): ~5h
+#   10 schedulers × 5 N × 500 ep = 25,000 ep
+#   @ ~0.7 sec/(sched, ep) ≈ 17,500 sec ≈ 5h
+# 4-ambient total: ~20h Mac CPU.  V100/A100 sbatch ≈ 2-3h elapsed.
+# Phase X-A will calibrate the actual Mac CPU rate.
+#
+# All schedulers paired via seed_base=100000.
+# =====================================================================
+_inherit: default
+eval:
+  # Ours-auto_only Stage 1 ckpt (Pareto anchor)
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+
+  # Decima reproductions
+  decima_true_vanilla_ckpt: "checkpoints/decima_true_vanilla_N17/best.pt"
+  decima_true_thermal_ckpt: "checkpoints/decima_true_thermal_N17/best.pt"
+
+  # HGATE-PPO (Wu 2025)
+  hgate_ppo_ckpt:        "checkpoints/hgate_ppo_N17/best.pt"
+  hgate_hidden_dim:       128
+  hgate_num_gat_layers:     2
+  hgate_num_heads:          4
+
+  # D2 (HK-5.0)
+  decima_xattn_ckpt:        "checkpoints/decima_xattn_N17/best.pt"
+  decima_xattn_hidden_dim:       128
+  decima_xattn_num_gcn_layers:     4
+  decima_xattn_num_heads:          4
+
+  num_episodes:    500
+  deterministic:   true
+  seed_base:       100000
+  device:          cpu
+  num_nodes_list:   [9, 13, 17, 24, 33]
+  action_mode_list: [auto_only]
+  scheduler_filter:
+    # 3 classical heuristics
+    - HEFT
+    - ThermalHEFT
+    - RoundRobin
+    # Throttled-HEFT (round-1 reviewer obligation; folded as 2 rows
+    # — note: only Throttled-HEFT-agent_only fits auto_only-only
+    # action_mode_list above; the hybrid variant runs in a separate
+    # hybrid-mode yaml).
+    - Throttled-HEFT-agent_only
+    # RL reproductions
+    - Decima-vanilla
+    - Decima-thermal
+    - "HGATE-PPO"
+    - "D2"
+    # Ours Pareto anchor
+    - Ours-auto_only
+  T_target:           75.0
+  initial_temp_range: [25.0, 40.0]     # COLD regime (Phase X-B sibling)
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/grand_matrix_cold"

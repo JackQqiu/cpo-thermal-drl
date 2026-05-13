@@ -1,0 +1,55 @@
+# =====================================================================
+# eval_main_6way_hot_n17.yaml — D2 sanity 6-way smoke (Phase X-A)
+# =====================================================================
+# Paper §5 main-table data point + D2 ckpt sanity gate.  Reuses the
+# HK-4.7 5-way regime (HEFT / Decima-v / Decima-t / HGATE-PPO /
+# Ours-auto_only) and adds D2 as the 6th row.
+#
+# 6 schedulers × N=17 × HOT [60,75]°C × 50 ep paired.  ~10 min Mac CPU.
+#
+# Why a separate yaml from eval_hgate_ppo_hot.yaml: this run is
+# both the §5 main-table data source AND the Mac-CPU timing calibration
+# for the larger Phase X-B grand matrix (it tells us how long the
+# 100k-ep matrix will take).
+# =====================================================================
+_inherit: default
+eval:
+  # Ours-auto_only Stage 1 ckpt — the §5 Pareto anchor
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+
+  # Decima (HK-3.x reproductions)
+  decima_true_vanilla_ckpt: "checkpoints/decima_true_vanilla_N17/best.pt"
+  decima_true_thermal_ckpt: "checkpoints/decima_true_thermal_N17/best.pt"
+
+  # HGATE-PPO (HK-4.6.1 retrain best.pt — H collapsed early, ep_ret_mean
+  # +136.80 at step 1.12M; paper §5 treats as Wu 2025 reference)
+  hgate_ppo_ckpt:        "checkpoints/hgate_ppo_N17/best.pt"
+  hgate_hidden_dim:       128
+  hgate_num_gat_layers:     2
+  hgate_num_heads:          4
+
+  # D2 (HK-5.0 V100 retrain best.pt — full 5M-step trained, ep_ret_mean
+  # +832.79 at step 4.63M, hot-stage policy)
+  decima_xattn_ckpt:        "checkpoints/decima_xattn_N17/best.pt"
+  decima_xattn_hidden_dim:       128
+  decima_xattn_num_gcn_layers:     4
+  decima_xattn_num_heads:          4
+
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired with all other Phase X CSVs
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter:
+    - HEFT
+    - Decima-vanilla
+    - Decima-thermal
+    - "HGATE-PPO"
+    - "D2"
+    - Ours-auto_only
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/main_6way_hot_n17"
