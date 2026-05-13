@@ -69,6 +69,7 @@ _PALETTE = {
     # Future Stage 2/3 baselines (placeholders, distinct hue families)
     "Decima-true":               "#5C8A3A",     # forest green (Stage 2 future)
     "HGATE-PPO":                 "#8A5C3A",     # warm brown (Stage 3 future)
+    "D2":                        "#6E4A8A",     # plum purple (HK-5.0 composition baseline)
 }
 
 _THRESHOLD_COLORS = {

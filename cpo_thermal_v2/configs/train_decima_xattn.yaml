@@ -1,0 +1,59 @@
+# =====================================================================
+# train_decima_xattn.yaml — D2 baseline (Decima encoder + cross-attention)
+# =====================================================================
+# Status (HK-5.0): NEW.  D2 wires the Mao 2019 homogeneous-GCN encoder
+# from decima_true.py onto the cross-attention actor in
+# models/cross_attention_actor.py, trained with standard PPO + single
+# scalar critic.  This is the §5 ablation chain isolation point that
+# separates encoder architecture from actor architecture:
+#
+#     Decima      (homog GCN  + MLP scorer    )
+#                   |-- swap MLP for cross-attn --|
+#     D2          (homog GCN  + cross-attention actor)   <- THIS
+#                   |-- swap homog GCN for hetero GAT --|
+#     HGATE-PPO   (hetero GAT + MLP scorer    )
+#
+# Hyper-params follow Wu 2025 Table IV (same as train_hgate_ppo.yaml
+# HK-4.6.1) — D2 and HGATE-PPO must share PPO settings so the §5
+# comparison isolates the model and not the optimiser.
+# =====================================================================
+_inherit: default
+
+training:
+  algorithm:        ppo
+  device:           cuda
+  total_steps:      5_000_000        # match Ours stage 1 budget
+  num_envs:         16
+  rollout_length:   256
+  learning_rate:    2.0e-4           # Wu 2025 Table IV (Fig 4 sweet spot)
+  clip_eps:         0.2              # Wu 2025 Table IV
+  value_coef:       0.5              # Wu 2025 Table IV (c1)
+  entropy_coef:     0.01             # Wu 2025 Table IV (c2)
+  gae_lambda:       0.98             # Wu 2025 Table IV
+  gamma:            0.99             # Wu 2025 Table IV
+  ppo_epochs:       4
+  minibatch_size:   64
+
+model:
+  architecture:     decima_xattn     # dispatch in train.py
+  hidden_dim:       128              # cross-attn requires hidden % num_heads == 0
+  num_gcn_layers:   4                # Mao 2019 default
+  num_heads:        4                # Wu 2025 / Ours default
+
+env:
+  action_mode:      auto_only
+  # D2's homogeneous GCN encoder consumes only task_x / proc_x / edges_t2t.
+  # NO thermal physics edges and NO task-proc affinity edges are passed
+  # to the GCN — matching decima_true.py's encoder constraints.  This
+  # is enforced in code; the env-side observation_keys filter is not
+  # required.
+
+# Reward — same as HGATE-PPO and Ours (thermal_aware single scalar)
+# so the §5 comparison isolates the architecture choice.
+reward:
+  reward_mode:      thermal_aware
+
+logging:
+  run_name:         decima_xattn_N17
+  checkpoint_dir:   "checkpoints/decima_xattn_N17"
+  tb_log_dir:       "tb_logs/decima_xattn_N17"

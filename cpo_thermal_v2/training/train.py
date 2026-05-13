@@ -772,6 +772,10 @@ def main() -> None:
         from cpo_thermal_v2.training.train_hgate_ppo import train_hgate_ppo
         train_hgate_ppo(cfg)
         return
+    if arch == "decima_xattn":
+        from cpo_thermal_v2.training.train_decima_xattn import train_decima_xattn
+        train_decima_xattn(cfg)
+        return
 
     train(cfg)
 

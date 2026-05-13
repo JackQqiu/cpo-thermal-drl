@@ -260,6 +260,45 @@ def _build_scheduler_factories(eval_cfg: Dict[str, Any]):
                       f"(hidden={_hg_hidden}, gat_layers={_hg_gat_layers}, "
                       f"heads={_hg_heads})")
 
+    # D2 — Decima encoder + cross-attention actor + PPO (HK-5.0).  The
+    # §5 ablation chain isolation point between Decima and HGATE-PPO:
+    #   Decima  --(swap MLP scorer for cross-attn)-->  D2
+    #   D2      --(swap homog GCN for hetero GAT)--->  HGATE-PPO
+    # auto_only-only.  Opt-in via eval.decima_xattn_ckpt; column absent
+    # otherwise.
+    if _included("D2"):
+        _d2_ckpt = eval_cfg.get("decima_xattn_ckpt", None)
+        if not _d2_ckpt:
+            print("[evaluate] D2 column skipped — set "
+                  "eval.decima_xattn_ckpt to enable.")
+        else:
+            try:
+                from cpo_thermal_v2.baselines.decima_xattn import DecimaXAttnScheduler
+            except ImportError as e:                          # pragma: no cover
+                print(f"[evaluate] DecimaXAttnScheduler unavailable: {e}")
+            else:
+                _d2_hidden     = int(eval_cfg.get("decima_xattn_hidden_dim",     128))
+                _d2_gcn_layers = int(eval_cfg.get("decima_xattn_num_gcn_layers",   4))
+                _d2_heads      = int(eval_cfg.get("decima_xattn_num_heads",        4))
+
+                def decima_xattn_factory(num_nodes: int, action_mode: str):
+                    if action_mode != "auto_only":
+                        raise ValueError(
+                            "D2 only runs in auto_only mode")
+                    return DecimaXAttnScheduler(
+                        ckpt_path      = _d2_ckpt,
+                        num_nodes      = num_nodes,
+                        deterministic  = bool(eval_cfg.get("deterministic", True)),
+                        device         = eval_cfg.get("device", "cpu"),
+                        hidden_dim     = _d2_hidden,
+                        num_gcn_layers = _d2_gcn_layers,
+                        num_heads      = _d2_heads,
+                    )
+                factories.append(("D2", decima_xattn_factory))
+                print(f"[evaluate] D2 registered from {_d2_ckpt} "
+                      f"(hidden={_d2_hidden}, gcn_layers={_d2_gcn_layers}, "
+                      f"heads={_d2_heads})")
+
     # Trained PPO — three variants (auto_only / agent_only / hybrid),
     # all using the same checkpoint.  ``action_mode`` is honoured by
     # both the env and the model wrapper.
