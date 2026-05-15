@@ -1,0 +1,44 @@
+# =====================================================================
+# ablation_ours_no_rc_edge.yaml — Ours-NoRCEdge (Stage-1 from scratch)
+# =====================================================================
+# Paper §5.3 / §6.2 isolation experiment for the RC-coupling edge
+# attribute. Identical to ``stage1_auto_only.yaml`` in every other
+# respect (hetero-GAT trunk, cross-attention placement actor,
+# thermal-aware reward, 3M-step PPO with the standard cold→warm→hot
+# curriculum). The single difference is ``env.disable_rc_edge: true``,
+# which causes the env to emit empty ``edges_p2p`` / ``edges_p2p_attr``
+# lists; the encoder's p2p layers therefore receive (2, 0) edge_index
+# and contribute no signal during the forward pass.
+#
+# Why Stage-1-from-scratch rather than warm-start
+# -----------------------------------------------
+# A warm-started Stage-2-style ablation (load Stage-1 best.pt, then
+# train with disable_rc_edge=true) would NOT cleanly isolate the
+# RC-edge contribution: the encoder weights would already have been
+# shaped by the RC-edge gradient signal during Stage-1 training, and
+# the ablation would test "what if we removed the attribute at
+# inference" rather than "what if we never had it during training".
+#
+# Expected reading of the result
+# ------------------------------
+#   - If Ours-NoRCEdge viol_rate ≈ 0.002 (matches Ours-auto_only):
+#       RC-edge attribute is not contributing; paper §6.2 main-claim
+#       on RC-edge inductive bias is falsified; §5 narrative needs
+#       revision to drop the RC-edge claim.
+#   - If Ours-NoRCEdge viol_rate ≫ 0.002:
+#       RC-edge attribute IS contributing; paper §6.2 main-claim
+#       stands and §5 Component 5 bundling acknowledgement (HK-paper-6
+#       added in §5.3 "What this chain does and does not isolate") can
+#       be partially withdrawn with this new evidence.
+#
+# Expected wall time on 1×V100 + 16 envs: ~6h (matches stage1_auto_only)
+# =====================================================================
+_inherit: stage1_auto_only
+
+env:
+  disable_rc_edge: true       # empty p2p edges → no RC-edge signal
+
+logging:
+  run_name:        ours_no_rc_edge_N17
+  checkpoint_dir:  "checkpoints/ours_no_rc_edge_N17"
+  tb_log_dir:      "tb_logs/ours_no_rc_edge_N17"

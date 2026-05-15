@@ -249,6 +249,17 @@ class CPOThermalDAGEnvV2(gym.Env):
         # ``None`` (default) = no filter; legacy schedulers see the full
         # graph_obs dict unchanged.
         observation_keys: Optional[List[str]] = None,
+        # ---- RC-edge ablation (paper §5.3 / §6.2 Ours-NoRCEdge) ----
+        # When True, ``_build_graph_obs`` emits empty ``edges_p2p`` /
+        # ``edges_p2p_attr`` lists, ablating the RC-coupling edge
+        # attribute pathway through the heterogeneous encoder while
+        # leaving every other architectural axis (hetero trunk, typed
+        # nodes, cross-attention placement actor) unchanged.  The
+        # proc-proc message-passing layers still exist in the model;
+        # they simply receive zero edges and contribute no signal.
+        # See cpo_thermal_v2/models/hetero_encoder.py:357 for the empty-
+        # edge fast path that this hooks into.
+        disable_rc_edge: bool = False,
         # ---- RC matrices ----
         rc_matrix_dir: Optional[str] = None,
         rc_A: Optional[np.ndarray] = None,
@@ -335,6 +346,9 @@ class CPOThermalDAGEnvV2(gym.Env):
         self.observation_keys: Optional[List[str]] = (
             list(observation_keys) if observation_keys is not None else None
         )
+
+        # -------- RC-edge ablation --------
+        self._disable_rc_edge: bool = bool(disable_rc_edge)
 
         # -------- gym spaces --------
         if self.action_mode == "auto_only":
@@ -1058,8 +1072,15 @@ class CPOThermalDAGEnvV2(gym.Env):
                 edges_t2t_attr.append([float(tr) / 100.0])
 
         # ---- proc↔proc edges (precomputed at init) ----
-        edges_p2p      = [list(e) for e in self._cached_p2p_edges]
-        edges_p2p_attr = [list(a) for a in self._cached_p2p_attrs]
+        # When self._disable_rc_edge=True, emit empty lists so the
+        # hetero encoder's p2p layers receive (2, 0) edge_index +
+        # (0, 1) edge_attr (Ours-NoRCEdge ablation; see __init__ kwarg).
+        if self._disable_rc_edge:
+            edges_p2p      = []
+            edges_p2p_attr = []
+        else:
+            edges_p2p      = [list(e) for e in self._cached_p2p_edges]
+            edges_p2p_attr = [list(a) for a in self._cached_p2p_attrs]
 
         # ---- task→proc edges (only ready × non-masked) ----
         mask = self._action_mask()
