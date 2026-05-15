@@ -80,6 +80,20 @@
 - **This eval plan lives on `main`** — operational, no paper prose
 - **Switch protocol**: when editing paper, `git checkout paper-draft`; when editing code/eval, `git checkout main`
 
+## External Reviews (PDFs / industry sources analysed this plan)
+
+### Chang & Kumar, EDPS 2025 keynote — analysed 2026-05-13
+- **Source PDF**: `0400chang.pdf` (Norman Chang & A. Kumar, Ansys, EDPS 2025)
+- **Title**: "Harnessing ML and Agentic AI for Co-packaged Optics Co-optimization in 3D Heterogeneous Integration"
+- **Full review**: `paper_drafts/external_review_chang_edps2025.md`
+- **Key takeaways for Phase G**:
+  - 🔴 28 °C measured Tx-Rx temp gradient (Slide 7, Youn DesignCon 2021) — calibration anchor for our §3 RC-matrix physics
+  - 🔴 Alam DAC 2025 "Accurate Thermal Simulation of 3DIC Package with CPO" — closest design-time prior, must cite in §2
+  - 🟡 ML thermal-surrogate triple (He MLCAD 2024 / ICCAD 2023, Lu MLCAD 2025) — useful related-work paragraph + reviewer-defence for "why not ML surrogate in env"
+  - 🟢 No RL / DAG / scheduling overlap in deck — confirms our operational niche has no industry competitor
+- **No code action required** — Phase G paper-draft branch only
+- **Action items distilled at file §4** (3 tiers, ranked)
+
 ## Available Tools / Resources
 
 - `cpo_thermal_v2/evaluation/evaluate.py` — main eval entrypoint (already supports D2 via HK-5.0)

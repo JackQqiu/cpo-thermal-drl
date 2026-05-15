@@ -16,9 +16,17 @@ per the plan file.
 `.planning/2026-05-13-paper-section5-eval-plan/task_plan.md`
 - Read at the start of every session to recover state.
 - Companion files in the same dir: `findings.md` (validated data +
-  audit findings + ckpt locations), `progress.md` (session log).
+  audit findings + ckpt locations + **external paper / keynote
+  reviews**), `progress.md` (session log).
 - The skill's hooks auto-inject the plan head into tool-call context, so
   the plan is in attention without manual re-reads.
+
+**External reviews (industry / paper / keynote analyses for Phase G)**:
+- `paper_drafts/external_review_chang_edps2025.md` — Ansys EDPS 2025
+  keynote (Chang & Kumar) on CPO + ML + Agentic AI. Supplies must-cite
+  priors (Youn DesignCon 2021, Alam DAC 2025), 28 °C measured Tx-Rx
+  gradient calibration anchor, ML thermal-surrogate citation block, and
+  reviewer-defence prep. Read before Phase G paper-draft edits.
 
 **Last commits**:
 - `d654744` (HK-5.0): D2 baseline code on `main` — encoder + actor-critic

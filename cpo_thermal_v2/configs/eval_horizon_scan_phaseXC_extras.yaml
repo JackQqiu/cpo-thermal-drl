@@ -1,0 +1,38 @@
+# =====================================================================
+# eval_horizon_scan_phaseXC_extras.yaml — Phase X-C H=200 sibling
+# =====================================================================
+# Plugs the 3 missing schedulers from the main X-C H=200 run:
+#   - Throttled-HEFT-hybrid (needs action_mode=hybrid)
+#   - Throttled-HEFT-agent_only (needs action_mode=agent_only)
+#   - Ours-hybrid (needs action_mode=hybrid)
+#   - Decima (= Ours-NoThermal, Decima_fair ckpt)
+# Main yaml's action_mode_list was [auto_only] which skipped these.
+#
+# N=17, HOT, dags_per_episode=200, 500 ep paired (seed_base=100000).
+# Estimated ~1h Mac CPU (Throttled is fast, Ours-hybrid + Decima are
+# H=200 model-forward heavy).
+# =====================================================================
+_inherit: default
+eval:
+  # Ours factory uses checkpoint_path; Ours-hybrid wants Stage 2 ckpt
+  checkpoint_path: "checkpoints/stage2_hybrid_v3_stress_N33/best.pt"
+
+  # Ours-NoThermal via decima_fair_ckpt key
+  decima_fair_ckpt: "checkpoints_v1/decima_fair_N17/best.pt"
+
+  num_episodes:    500
+  deterministic:   true
+  seed_base:       100000             # paired with main X-C and X-B
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid, agent_only]   # runner skips factory mismatches
+  scheduler_filter:
+    - "Decima"                          # = Ours-NoThermal
+    - Throttled-HEFT-hybrid
+    - Throttled-HEFT-agent_only
+    - Ours-hybrid
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]    # HOT
+  max_dag_size:       null
+  dags_per_episode:   200
+  output_dir: "eval_results/horizon_scan_phaseXC/h200_extras"

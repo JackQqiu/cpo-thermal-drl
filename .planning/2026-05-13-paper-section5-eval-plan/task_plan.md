@@ -13,7 +13,39 @@ at higher episode count.
 
 ## Current Phase
 
-**Phase X-A — D2 sanity 6-way smoke** (Phase 0 complete; D2 ckpt landed)
+**Phase G — Paper §5 wholesale rewrite + §1 contribution 4 refresh**
+(all eval data collected; ready to start on `paper-draft` branch).
+
+**Eval data pool (anchoring Phase G)**:
+- X-B Tier 2: 120,000 ep × 240 cells (12 sched × 5 N × 4 ambient × 500 ep)
+- X-C H=200 main+extras: 12,000 ep × 24 cells (12 sched × N=17 × HOT × H=200 × 500 ep)
+- Plus pre-existing HK-4.7 + Stage-2-hybrid CSVs
+- Total: ~133,000 ep across ~270 cells
+
+**Phase G action steps** (in order):
+1. Switch to `paper-draft` branch
+2. Write Phase G aggregator script (merge CSVs + Wilcoxon + Holm-Bonferroni + rename Decima→Ours-NoThermal)
+3. Refresh `paper_drafts/section5_main_results.tex` numbers (500 ep replaces 50 ep HK-4.7)
+4. Refresh `paper_drafts/section5X_hybrid_case_study.tex` with H=200 hybrid advantage positive coda
+5. Refresh §1 contribution 4 bounded-claim wording (7/12500 across envelope, not "single residual N=9 extreme")
+6. Plug-in both section5*.tex into draft/draft.tex (wholesale §5 replace)
+7. Add §5.4 horizon-failure-mode figure from X-C data
+8. Apply writing-style rules from `~/.claude/.../memory/feedback_paper_writing_pitfalls.md`
+9. Run paper-audit quick-audit + deep-review on result
+10. Address any remaining audit findings (incl. Phase G items deferred from HK-paper-3a)
+
+Literature check (2026-05-13 evening) cleared: no exact prior for
+hetero-GNN + RC-coupling edge attribute + DAG scheduling + CPO.
+External review of Ansys EDPS 2025 keynote (Chang & Kumar) at
+`paper_drafts/external_review_chang_edps2025.md` supplies 2 must-cite
+priors (Youn DesignCon 2021, Alam DAC 2025) + 28°C calibration anchor
+for §3 RC matrix.
+
+Writing-style guidance (auto-loaded in Phase G):
+- Memory file: `~/.claude/.../memory/feedback_paper_writing_pitfalls.md`
+- 9 original rules + extended vocabulary list (~20 forbidden AI-tone
+  verbs) + formatting constraints + surgical-edit philosophy
+- Apply BEFORE drafting any prose on `paper-draft` branch
 
 ## Phases
 

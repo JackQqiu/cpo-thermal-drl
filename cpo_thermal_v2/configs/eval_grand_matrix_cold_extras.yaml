@@ -1,0 +1,49 @@
+# =====================================================================
+# eval_grand_matrix_hot_extras.yaml — Phase X-B HOT extras: Ours-NoThermal,
+# Throttled-HEFT (2 modes), Ours-hybrid
+# =====================================================================
+# Patches the gaps in eval_grand_matrix.yaml:
+#   1. Throttled-HEFT-hybrid + Throttled-HEFT-agent_only (need hybrid/agent_only
+#      action modes; the main yaml only had auto_only)
+#   2. Ours-hybrid (Stage 2 hybrid, paper §5 hybrid trade-off row)
+#   3. Ours-NoThermal — loaded from checkpoints_v1/decima_fair_N17/best.pt
+#      (the existing "decima_fair" ckpt is Ours architecture trained
+#      without thermal observation or reward; mis-named historically,
+#      paper-equivalent of "Ours-NoThermal" — the §5 ablation that
+#      isolates the contribution of thermal-awareness as a whole)
+#
+# 5 N values × 500 ep × 4 schedulers = 10,000 ep target.
+# Throttled-HEFT is cheap (pure heuristic), Ours-NoThermal + Ours-hybrid
+# are model-forward heavy.  Estimated ~1-1.5h Mac CPU.
+#
+# Paired by seed_base=100000 with eval_grand_matrix.yaml HOT slice so
+# Phase G aggregator joins them on episode_id.
+# =====================================================================
+_inherit: default
+eval:
+  # Ours-{auto_only, hybrid} share the same factory; checkpoint_path =
+  # Stage 1 ckpt for auto_only, Stage 2 for hybrid.  This yaml's hybrid
+  # row uses Stage 2 ckpt.  Auto_only NOT in scheduler_filter (already
+  # covered by main yaml).
+  checkpoint_path: "checkpoints/stage2_hybrid_v3_stress_N33/best.pt"
+
+  # Ours-NoThermal (relabeled decima_fair — Ours architecture, no
+  # thermal obs, no thermal reward).
+  decima_fair_ckpt: "checkpoints_v1/decima_fair_N17/best.pt"
+
+  num_episodes:    500
+  deterministic:   true
+  seed_base:       100000             # paired with main yaml + X-A
+  device:          cpu
+  num_nodes_list:   [9, 13, 17, 24, 33]
+  action_mode_list: [auto_only, hybrid, agent_only]   # Decima needs auto_only, Throttled needs hybrid/agent_only, Ours-hybrid needs hybrid; runner skips factory-mismatched cells
+  scheduler_filter:
+    - "Decima"                     # = Ours-NoThermal (decima_fair_ckpt)
+    - Throttled-HEFT-hybrid
+    - Throttled-HEFT-agent_only
+    - Ours-hybrid
+  T_target:           75.0
+  initial_temp_range: [25.0, 40.0]     # COLD regime (extras sibling)
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/grand_matrix_cold_extras"
