@@ -1,35 +1,60 @@
 """
-baselines/decima_fair.py — Fair Decima reimplementation
-=========================================================
+baselines/decima_fair.py — Ours-NoThermal (paper-facing) / thermal-blind-input baseline
+======================================================================================
 
-A from-scratch Decima [Mao et al., SIGCOMM 2019] implementation that
-NEVER sees thermal features — at training OR at inference time.
+Paper-facing name: **Ours-NoThermal**
+Eval CSV scheduler label: **Decima** (renamed to Ours-NoThermal by
+``cpo_thermal_v2/scripts/compose_paper_section5.py`` aggregator).
+Disk checkpoint: ``checkpoints_v1/decima_fair_N17/best.pt``.
 
-This addresses the fairness limitation of ``decima.py`` (which reuses
-our Stage-2 checkpoint with thermal features masked at inference; the
-trained weights still encode thermal-aware behavior).
+What this baseline isolates
+---------------------------
+The Ours architecture (heterogeneous-GAT encoder + RC-coupling edge
+attribute + cross-attention placement actor) trained WITHOUT
+per-processor thermal observation features and WITHOUT the
+``est_temp_rise`` task-to-processor edge attribute. The thermal-aware
+reward shaping (Section §3 of the paper, ``reward.thermal_aware``) is
+RETAINED, identical to Ours-auto_only.
 
-Key differences from ``decima.py``:
-  - ``proc_in_dim = 3`` instead of 7 (no T_norm, dT/dt, leakage, headroom)
-  - Trained from scratch using a separate training script
-    (``scripts/train_decima_fair.py``)
-  - Reward is makespan-only (no thermal violation penalty in the env
-    that this baseline trains in)
+This baseline answers the paper §5 Component 5 question: "Does the
+proposed architecture still deliver near-optimal safety when the
+policy cannot observe per-processor temperatures, as long as the
+training reward remains thermal-aware?" Empirical answer: yes
+(viol_rate = 0.006 vs Ours-auto_only's 0.002; McNemar p = 0.625 ns).
 
-The trained checkpoint is loaded from a SEPARATE path
-(typically ``checkpoints/decima_fair_N17/best.pt``).
+Training-time configuration (ground truth: train_decima_fair.yaml)
+------------------------------------------------------------------
+  - proc_in_dim     = 3   (drops T_norm, dT/dt, leakage, headroom from proc node features)
+  - edge_dim_t2p    = 1   (drops est_temp_rise from task→proc edges)
+  - reward          = thermal-aware (unchanged from Ours; the fairness
+                      constraint is on INPUT FEATURES only, not on the
+                      reward signal)
+  - env wrapper     = ThermalBlindWrapper at runtime (strips proc
+                      thermal cols + edge thermal cols from
+                      info['graph_obs'] at every reset/step)
+  - total_steps     = 2_000_000  (4 h on 1×V100 + 16 envs)
 
-Architectural parity with Ours:
-  - Same HeteroEncoder (GIN-style message passing on task ↔ proc graph)
-  - Same cross-attention actor (auto_only mode: Discrete(N) action)
+Architectural parity with Ours-auto_only:
+  - Same HeteroEncoder
+  - Same cross-attention placement actor
   - Same value critic
-The ONLY difference at the model level is ``proc_in_dim``.
+The ONLY differences at the model level are ``proc_in_dim`` (3 vs 7)
+and ``edge_dim_t2p`` (1 vs 2).
+
+Naming history
+--------------
+The file name ``decima_fair`` predates the paper-facing name. The
+``decima`` prefix comes from this baseline being the fair counterpart
+to ``baselines/decima.py`` (which reuses our Stage-2 checkpoint with
+inputs masked, leaking thermal-aware weights). Paper-facing prose
+uses ``Ours-NoThermal``; CSV column reads ``Decima``; this module
+keeps the historical name to avoid 5-file rename churn.
 
 Usage in evaluation::
 
     from cpo_thermal_v2.baselines.decima_fair import DecimaFairScheduler
     decima = DecimaFairScheduler(
-        ckpt_path="checkpoints/decima_fair_N17/best.pt",
+        ckpt_path="checkpoints_v1/decima_fair_N17/best.pt",
         num_nodes=17,
     )
     action = decima.schedule(obs, info)
