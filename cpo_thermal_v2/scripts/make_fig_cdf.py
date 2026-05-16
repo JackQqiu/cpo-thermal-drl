@@ -76,8 +76,14 @@ def main() -> None:
             (df.num_nodes == 17) &
             (df.ambient == "hot")]
 
-    fig, axes = plt.subplots(1, 2, figsize=(6.9, 3.2),
-                              gridspec_kw=dict(wspace=0.30))
+    # Slightly taller figure + bottom margin reserved for the
+    # figure-level legend below both panels.
+    fig, axes = plt.subplots(1, 2, figsize=(6.9, 3.6),
+                              gridspec_kw=dict(wspace=0.30,
+                                                bottom=0.26,
+                                                top=0.88,
+                                                left=0.08,
+                                                right=0.96))
     ax_a, ax_b = axes
 
     for csv_name, label, pal_key, action_mode, ls in SCHEDULERS:
@@ -99,9 +105,16 @@ def main() -> None:
     ax_a.axvline(80, color="#c0392b", linestyle="--",
                  linewidth=0.95, alpha=0.8)
     ax_a.axvspan(80, 100, color="#c0392b", alpha=0.06, zorder=0)
-    ax_a.text(80.5, 0.06, r"$T_{\mathrm{pen}}$",
-              fontsize=8, color="#c0392b", ha="left", va="bottom",
-              rotation=90)
+    # T_pen label: anchored at the vertical guide near the lower-left
+    # of the chart where the cool-blue curves (HEFT family) start
+    # rising; this region is mostly empty in panel (a) because all
+    # CDFs are flat near y=0 for x<80. Rotated 90 so it tracks the
+    # vertical guide line itself.
+    ax_a.text(81, 0.50, r"$T_{\mathrm{pen}}{=}80\,^\circ$C",
+              fontsize=7.5, color="#c0392b",
+              ha="left", va="center", rotation=90,
+              bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
+                         edgecolor="none", alpha=0.92))
     ax_a.set_xlim(60, 100)
     ax_a.set_ylim(-0.02, 1.02)
     ax_a.set_xlabel("Peak temperature per episode ($^\\circ$C)")
@@ -123,9 +136,14 @@ def main() -> None:
               fontsize=9.5, ha="center", va="bottom", fontweight="bold")
     ax_b.grid(True, which="major", linestyle=":",
               linewidth=0.4, alpha=0.30)
-    # Shared legend in panel b, outside the axes on the right
-    ax_b.legend(loc="lower right", frameon=False, fontsize=7,
-                ncol=1, handlelength=2.0, columnspacing=0.8)
+    # Shared legend placed BELOW both panels (3 cols x 3 rows) so it
+    # never overlaps with the CDF curves inside either panel.
+    handles, labels_ = ax_b.get_legend_handles_labels()
+    fig.legend(handles, labels_,
+               loc="lower center",
+               bbox_to_anchor=(0.5, -0.03),
+               frameon=False, fontsize=8,
+               ncol=3, handlelength=2.4, columnspacing=1.8)
 
     _save_pdf_and_svg(fig, "fig_cdf")
     plt.close(fig)
