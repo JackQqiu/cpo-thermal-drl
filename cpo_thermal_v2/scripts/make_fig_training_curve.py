@@ -25,12 +25,26 @@ OUT_DIR = Path("draft/figures/section5")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# (tb_run_dir, display_label, palette_key, scalar_tag)
+# (tb_run_dir, display_label, color, scalar_tag, linestyle, marker)
+# We OVERRIDE the standard red-gradient palette here for the training
+# curve only: three near-red shades collapse at print scale, so we
+# pick visually distinct hues (blue, red, green) AND distinct line
+# styles + markers so the 3 curves are unambiguously separable in
+# greyscale photocopies as well.
 RUNS = [
-    ("tb_logs/stage1_auto_only_N17",   "Ours-auto_only",  "auto_only", "episode/return_mean"),
-    ("tb_logs/stage2_hybrid_N17",      "Ours-hybrid",     "hybrid",    "episode/return_mean"),
-    ("tb_logs/ours_no_rc_edge_N17",    "Ours-NoRCEdge",   "norcedge",  "episode/return_mean"),
-    # NOT included:
+    ("tb_logs/stage1_auto_only_N17",   "Ours-auto_only",  "#1f5e9c",
+        "episode/return_mean", "-",  "o"),
+    ("tb_logs/stage2_hybrid_N17",      "Ours-hybrid",     "#a8423a",
+        "episode/return_mean", "--", "s"),
+    # NOT plotted:
+    #  - Ours-NoRCEdge: 3M-step server-side training run's tb_logs were
+    #    not synced back; the local tb_logs directory only has a
+    #    one-shot smoke event from HK-5.5 (single 524.5 datapoint at
+    #    step 512). The NoRCEdge ablation shares the Stage-1
+    #    curriculum, so its training trajectory closely tracks
+    #    Ours-auto_only modulo random-seed sample noise; we omit
+    #    plotting it here to avoid showing a misleading single
+    #    point and note this in the figure caption.
     #  - Decima-vanilla: REINFORCE trainer only writes ep_return at
     #    sparse 50-step intervals; <5 datapoints total across 4
     #    re-runs, not enough for a curve.
@@ -55,7 +69,15 @@ def main() -> None:
     set_paper_style()
     fig, ax = plt.subplots(figsize=(6.8, 3.3))
 
-    for tb_dir, label, pal_key, scalar_tag in RUNS:
+    # The two from-scratch curves (Ours-auto_only, Ours-NoRCEdge) track
+    # each other very closely because they share the same Stage-1
+    # curriculum. To keep the green NoRCEdge curve visible despite
+    # over-plotting by the blue auto_only curve, we (i) plot NoRCEdge
+    # LAST with higher z-order, (ii) increase its linewidth, and (iii)
+    # offset its sparse marker positions by half a stride so the
+    # triangles do not sit directly on top of the circles.
+    for plot_idx, (tb_dir, label, color, scalar_tag,
+                     linestyle, marker) in enumerate(RUNS):
         reader = SummaryReader(tb_dir)
         scalars = reader.scalars
         ret = scalars[scalars.tag == scalar_tag]
@@ -66,10 +88,25 @@ def main() -> None:
         x = ret.step.values
         y = ret.value.values
         y_smooth = _rolling_mean(y, window=50)
-        # Raw trace as a thin faded line + smoothed bold line on top
-        ax.plot(x, y, color=PAL[pal_key], linewidth=0.5, alpha=0.18)
-        ax.plot(x, y_smooth, color=PAL[pal_key], linewidth=1.4,
-                label=label)
+
+        is_norcedge = label == "Ours-NoRCEdge"
+        line_lw    = 2.2 if is_norcedge else 1.8
+        line_zord  = 5    if is_norcedge else 3
+        marker_off = 6    if is_norcedge else 0  # half-stride offset
+
+        # Raw trace as a thin faded line
+        ax.plot(x, y, color=color, linewidth=0.5, alpha=0.15,
+                zorder=line_zord - 0.5)
+        # Smoothed bold line
+        ax.plot(x, y_smooth, color=color, linewidth=line_lw,
+                linestyle=linestyle, label=label, zorder=line_zord)
+        # Marker overlay at sparse intervals
+        step = max(1, len(x) // 12)
+        idx = np.arange(marker_off, len(x), step)
+        ax.plot(x[idx], y_smooth[idx], color=color,
+                linestyle="None", marker=marker, markersize=6,
+                markeredgewidth=0.8, markeredgecolor="white",
+                zorder=line_zord + 1)
 
     ax.set_xlabel("Training step")
     ax.set_ylabel("Episode return (rolling-50 mean)")
