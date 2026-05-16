@@ -181,14 +181,8 @@ def fig_envelope_heatmap() -> None:
                 val = grid[i, j]
                 if np.isnan(val): continue
                 txt_color = "white" if val > 0.55 else "black"
-                # For Ours-hybrid panel, also show absolute count when low
-                if val < 0.05:
-                    n_unsafe = int(round(val * 500))
-                    txt = f"{val:.3f}\n({n_unsafe}/500)"
-                else:
-                    txt = f"{val:.3f}"
-                ax.text(j, i, txt, ha="center", va="center",
-                        fontsize=7, color=txt_color)
+                ax.text(j, i, f"{val:.3f}", ha="center", va="center",
+                        fontsize=8, color=txt_color)
 
     # shared colorbar
     cbar = fig.colorbar(im, ax=axes, fraction=0.04, pad=0.04,
