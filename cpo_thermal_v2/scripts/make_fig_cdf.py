@@ -30,19 +30,27 @@ OUT_DIR = Path("draft/figures/section5")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# Display order + palette key + action_mode for filtering grand_matrix
+# CDF-specific palette + linestyle.
+#
+# For this 9-line figure we OVERRIDE the standard family-grouped
+# palette because three near-same hues in the cool-blue / brown / red
+# families muddied together at print scale. We pick 9 distinct hues
+# (each scheduler has a unique colour) PLUS varied linestyles within
+# each family so the curves remain identifiable in greyscale as well.
 SCHEDULERS = [
-    # name (matches CSV scheduler column), display_label, palette_key,
-    #  action_mode, line_style
-    ("HEFT",            "HEFT",            "heft",          "auto_only", "-"),
-    ("ThermalHEFT",     "Thermal-HEFT",    "thermal_heft",  "auto_only", "-"),
-    ("Decima-vanilla",  "Decima-vanilla",  "decima_v",      "auto_only", "-"),
-    ("Decima-thermal",  "Decima-thermal",  "decima_t",      "auto_only", "-"),
-    ("HGATE-PPO",       "HGATE-PPO",       "hgate",         "auto_only", "-"),
-    ("D2",              "D2",              "d2",            "auto_only", "-"),
-    ("Ours-NoThermal",  "Ours-NoThermal",  "nothermal",     "auto_only", "-"),
-    ("Ours-auto_only",  "Ours-auto_only",  "auto_only",     "auto_only", "-"),
-    ("Ours-hybrid",     "Ours-hybrid",     "hybrid",        "hybrid",    "-"),
+    # (csv_name, display_label, color, action_mode, linestyle)
+    # Baseline / classical family (cool blues + gray)
+    ("HEFT",            "HEFT",            "#1f5e9c",   "auto_only", "-"),
+    ("ThermalHEFT",     "Thermal-HEFT",    "#5fa3d8",   "auto_only", "--"),
+    ("Decima-vanilla",  "Decima-vanilla",  "#3a3a3a",   "auto_only", ":"),
+    ("Decima-thermal",  "Decima-thermal",  "#9a9a9a",   "auto_only", "-"),
+    # GNN-prior family (warm browns + olive)
+    ("HGATE-PPO",       "HGATE-PPO",       "#7b3f1e",   "auto_only", "-"),
+    ("D2",              "D2",              "#e07b39",   "auto_only", "--"),
+    # Ours ablation family (yellow -> red gradient + distinct styles)
+    ("Ours-NoThermal",  "Ours-NoThermal",  "#c8932b",   "auto_only", "-"),
+    ("Ours-auto_only",  "Ours-auto_only",  "#a8423a",   "auto_only", "--"),
+    ("Ours-hybrid",     "Ours-hybrid",     "#5c1f1f",   "hybrid",    "-"),
 ]
 
 
@@ -86,7 +94,7 @@ def main() -> None:
                                                 right=0.96))
     ax_a, ax_b = axes
 
-    for csv_name, label, pal_key, action_mode, ls in SCHEDULERS:
+    for csv_name, label, color, action_mode, ls in SCHEDULERS:
         sub = df[(df.scheduler == csv_name) &
                  (df.action_mode == action_mode)]
         if len(sub) == 0:
@@ -94,25 +102,25 @@ def main() -> None:
             continue
         # (a) Peak-T CDF
         xs, ys = _cdf(sub.peak_temp_episode.values)
-        ax_a.step(xs, ys, where="post", color=PAL[pal_key],
-                  linewidth=1.4, linestyle=ls, label=label)
+        ax_a.step(xs, ys, where="post", color=color,
+                  linewidth=1.5, linestyle=ls, label=label)
         # (b) Makespan CDF
         xs, ys = _cdf(sub.total_makespan_ms.values)
-        ax_b.step(xs, ys, where="post", color=PAL[pal_key],
-                  linewidth=1.4, linestyle=ls, label=label)
+        ax_b.step(xs, ys, where="post", color=color,
+                  linewidth=1.5, linestyle=ls, label=label)
 
     # ----- Panel (a): Peak T -----
     ax_a.axvline(80, color="#c0392b", linestyle="--",
                  linewidth=0.95, alpha=0.8)
     ax_a.axvspan(80, 100, color="#c0392b", alpha=0.06, zorder=0)
-    # T_pen label: anchored at the vertical guide near the lower-left
-    # of the chart where the cool-blue curves (HEFT family) start
-    # rising; this region is mostly empty in panel (a) because all
-    # CDFs are flat near y=0 for x<80. Rotated 90 so it tracks the
-    # vertical guide line itself.
-    ax_a.text(81, 0.50, r"$T_{\mathrm{pen}}{=}80\,^\circ$C",
+    # T_pen label: placed at the BOTTOM of the chart inside the
+    # unsafe-shaded band — at x=81, y~0.05 the HEFT family curves are
+    # still at 0 (their CDFs don't lift until x>85), so this region
+    # is empty regardless of the bimodal Decima-thermal / D2 curves
+    # above. White bounding box gives extra contrast.
+    ax_a.text(81, 0.04, r"$T_{\mathrm{pen}}{=}80\,^\circ$C",
               fontsize=7.5, color="#c0392b",
-              ha="left", va="center", rotation=90,
+              ha="left", va="bottom", rotation=90,
               bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
                          edgecolor="none", alpha=0.92))
     ax_a.set_xlim(60, 100)
