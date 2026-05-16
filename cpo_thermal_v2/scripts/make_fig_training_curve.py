@@ -118,17 +118,35 @@ def main() -> None:
     ax.legend(loc="lower right", frameon=False, fontsize=9,
               ncol=3, columnspacing=1.8)
 
-    # Vertical curriculum markers — only relevant to Ours-auto_only
-    # (Stage-1 curriculum cold->warm at 4e5, warm->hot at 1.5e6)
+    # Vertical curriculum markers per run.
+    #
+    # Stage-1 (Ours-auto_only) curriculum:
+    #   cold (0 -> 4e5) -> warm (4e5 -> 1.5M) -> hot (1.5M -> 3M)
+    # Stage-2 (Ours-hybrid) curriculum: skips cold (warm-started from
+    # Stage-1 best.pt), only two stages over 1.5M total:
+    #   warm (0 -> 4e5) -> hot (4e5 -> 1.5M)
+    #
+    # We draw FOUR ticks (4e5 + 1.5M) with split colour-coded labels
+    # so each transition is attributable to the right run.
+    AUTO_BLUE = "#1f5e9c"
+    HYB_RED   = "#a8423a"
     ax.axvline(0.4e6, color="#888888", linestyle=":", linewidth=0.45,
                alpha=0.7)
     ax.axvline(1.5e6, color="#888888", linestyle=":", linewidth=0.45,
                alpha=0.7)
-    ax.text(0.4e6, ax.get_ylim()[1] * 0.95,
-            "  cold$\\to$warm", fontsize=7, color="#888888",
+    # auto_only labels (top half of plot)
+    ax.text(0.4e6, ax.get_ylim()[1] * 0.96,
+            r" auto\_only: cold$\to$warm", fontsize=7, color=AUTO_BLUE,
             ha="left", va="top", rotation=90)
-    ax.text(1.5e6, ax.get_ylim()[1] * 0.95,
-            "  warm$\\to$hot", fontsize=7, color="#888888",
+    ax.text(1.5e6, ax.get_ylim()[1] * 0.96,
+            r" auto\_only: warm$\to$hot", fontsize=7, color=AUTO_BLUE,
+            ha="left", va="top", rotation=90)
+    # hybrid labels (lower half of plot, anchored at ~y=370/y=370)
+    ax.text(0.4e6, ax.get_ylim()[1] * 0.46,
+            r" hybrid: warm$\to$hot", fontsize=7, color=HYB_RED,
+            ha="left", va="top", rotation=90)
+    ax.text(1.5e6, ax.get_ylim()[1] * 0.46,
+            r" hybrid: training end", fontsize=7, color=HYB_RED,
             ha="left", va="top", rotation=90)
 
     _save_pdf_and_svg(fig, "fig_training_curves")
