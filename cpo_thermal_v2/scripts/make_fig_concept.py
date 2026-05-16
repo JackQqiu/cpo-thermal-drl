@@ -86,14 +86,21 @@ def _draw_dag(ax: plt.Axes, dag: dict) -> None:
             order.append(n)
     max_depth = max(depth.values()) if depth else 1
 
-    # Layered layout: x = depth, y = within-depth slot
+    # Layered layout: x = depth (stretched), y = within-depth slot (tighter)
+    # X-stretch pushes depth layers further apart so the DAG fills the
+    # full panel width; the tighter Y allows the figure to stay compact
+    # vertically while preventing node overlap (combined with the smaller
+    # node radius cap below).
     depth_groups = {d: [] for d in range(max_depth + 1)}
     for n in order:
         depth_groups[depth[n]].append(n)
     pos = {}
+    X_STRETCH = 2.4
+    Y_TIGHTEN = 0.95
     for d, ns in depth_groups.items():
         for i, n in enumerate(ns):
-            pos[n] = (d, i - (len(ns) - 1) / 2)
+            pos[n] = (d * X_STRETCH,
+                      (i - (len(ns) - 1) / 2) * Y_TIGHTEN)
 
     # Find a simple longest path (critical path approximation)
     # Use weighted edge by successor workload
@@ -123,11 +130,13 @@ def _draw_dag(ax: plt.Axes, dag: dict) -> None:
                         alpha=0.95 if is_cp else 0.55,
                     ))
 
-    # Draw nodes — size by workload, colored by critical-path membership
+    # Draw nodes — size by workload, colored by critical-path membership.
+    # Radius cap reduced (was 0.20-0.50) so adjacent same-depth nodes do
+    # not overlap when the workload-scaled radius hits its upper bound.
     for n in nodes:
         x, y = pos[n]
         w = workloads.get(n, 1.0) / max_w
-        radius = 0.20 + 0.30 * w   # 0.20..0.50
+        radius = 0.17 + 0.22 * w   # 0.17..0.39
         if n in cp_nodes:
             face = "#d65644"
             edge = "#7a1f1f"
@@ -139,9 +148,10 @@ def _draw_dag(ax: plt.Axes, dag: dict) -> None:
                               linewidth=0.8, zorder=3)
         ax.add_patch(circle)
 
-    ax.set_xlim(-0.7, max_depth + 0.7)
+    ax.set_xlim(-0.7, max_depth * X_STRETCH + 0.7)
     ymax = max(len(g) for g in depth_groups.values()) if depth_groups else 1
-    ax.set_ylim(-ymax/2 - 1, ymax/2 + 1)
+    ax.set_ylim(-(ymax * Y_TIGHTEN) / 2 - 0.6,
+                 (ymax * Y_TIGHTEN) / 2 + 0.6)
     ax.set_aspect("equal")
     ax.axis("off")
 
