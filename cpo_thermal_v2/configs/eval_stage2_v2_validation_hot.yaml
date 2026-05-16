@@ -1,0 +1,31 @@
+# =====================================================================
+# eval_stage2_v2_validation_hot.yaml
+# =====================================================================
+# Stage 2 v2 ckpt validation — three-way paired comparison, HOT regime.
+#
+# v2 = R-C gate + E4 warmup fix (HK-1.5.8). This is the operating point
+# where Stage 2 hybrid's anticipatory delay action is meant to
+# demonstrate value: peak_T approaches T_pen=80 and the delay head has
+# thermal pressure to absorb. Warm regime saturated thermal margin in
+# v1 (peak_T 64°C with auto_only alone), leaving the delay head with
+# no headroom to outperform — see eval_results/stage2_validation_hot/.
+#
+# v2 Pareto question: does v2 hybrid achieve peak_T < s1-auto here?
+# v1 had Δ peak_T = +1.24 °C (wrong sign, p=0.049). Success criterion:
+# Δ ≤ 0 °C (preferably -0.5 to -1.5 °C, p<0.05).
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_v2_N17/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v2_validation_hot"

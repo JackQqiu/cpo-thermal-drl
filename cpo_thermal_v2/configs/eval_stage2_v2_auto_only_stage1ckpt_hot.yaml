@@ -1,0 +1,22 @@
+# =====================================================================
+# Companion to eval_stage2_v2_validation_hot.yaml.
+# Stage 1 ckpt under auto_only mode in HOT regime, same seed_base for
+# paired comparison with the v2 main run.
+# Output namespaced under stage2_v2_* to keep v1 / v2 result trees
+# isolated.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage1_auto_only_N17/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter: ["Ours-auto_only"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v2_validation_stage1ckpt_hot"

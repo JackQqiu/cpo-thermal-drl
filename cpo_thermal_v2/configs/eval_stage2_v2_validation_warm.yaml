@@ -1,0 +1,31 @@
+# =====================================================================
+# eval_stage2_v2_validation_warm.yaml
+# =====================================================================
+# Stage 2 v2 ckpt validation — three-way paired comparison, WARM regime.
+#
+# v2 = R-C gate + E4 warmup fix (HK-1.5.8). Pairs with the existing
+# eval_results/stage2_validation/ (v1) results to answer:
+#   - Did the fixes restore Pareto dominance vs s1-auto in warm regime?
+#   - How much improvement vs v1 hybrid?
+#
+# Cells (all share seed_base=100000 -> paired across schedulers AND
+# paired with the v1 main run if rerun on the same seeds):
+#   1. HEFT                   (classical baseline anchor)
+#   2. Ours-auto_only         (stage2 v2 ckpt, auto_only mode — placement head only)
+#   3. Ours-hybrid            (stage2 v2 ckpt, hybrid mode — full delay head)
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_v2_N17/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [50.0, 65.0]      # WARM regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v2_validation_warm"

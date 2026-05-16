@@ -1,0 +1,32 @@
+# =====================================================================
+# eval_stage2_v3final_validation_warm.yaml — v3 final.pt eval (WARM)
+# =====================================================================
+# v3 final.pt eval — uses the actual stress-phase-trained policy
+# (global_step=1,503,232, full 1.5M training completed) instead of
+# best.pt (step 200k, hot phase).
+#
+# The best-by-ep_ret criterion misled during the curriculum transition:
+# stress-phase ep_ret is naturally lower (ambient [75,82] near T_pen)
+# even when the policy improves, so best.pt was captured early in the
+# hot phase before stress ever ran.  This eval reflects what stress
+# training actually produced — the model that experienced the
+# would_violate_without_delay-firing regime.
+#
+# Same N=17 + seed_base=100000 as v3 best.pt eval so all 6 Ours variants
+# (s1, s2, v1, v2, v3-best, v3-final) remain paired.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_v3_stress_N33/final.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired with v1 / v2 / v3-best
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [50.0, 65.0]      # WARM regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v3final_validation_warm"

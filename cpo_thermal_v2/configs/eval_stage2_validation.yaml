@@ -1,0 +1,43 @@
+# =====================================================================
+# eval_stage2_validation.yaml
+# =====================================================================
+# Stage 2 ckpt validation — three-way paired comparison.
+#
+# Cells (all share seed_base=100000 -> paired across schedulers):
+#   1. HEFT                   (classical baseline anchor)
+#   2. Ours-auto_only         (stage1 best.pt, action_mode=auto_only)
+#   3. Ours-hybrid            (stage2 best.pt, action_mode=hybrid)
+#
+# Critical question: does Ours-hybrid achieve lower peak_T than
+# Ours-auto_only at the same makespan operating point? (Pareto
+# dominance vs operating-point shift critique.)
+# =====================================================================
+_inherit: default
+eval:
+  # NOTE: evaluate.py registers ONE Ours-* per checkpoint_path. We need
+  # both stage1 ckpt (for auto_only) AND stage2 ckpt (for hybrid). Plan:
+  # - This yaml uses checkpoint_path = stage2 ckpt
+  # - action_mode_list contains BOTH auto_only and hybrid
+  # - For Ours-auto_only cell, the stage2 ckpt's placement head is used
+  #   (delay head ignored under auto_only mode)
+  # - This is sub-optimal because stage2's placement was fine-tuned with
+  #   delay head active; for cleaner comparison we'd want stage1 ckpt
+  #   for auto_only, but that requires two runs. Defer to follow-up.
+  #
+  # CONSEQUENCE: this cell measures "stage2 ckpt under auto_only mode"
+  # not "stage1 ckpt under auto_only mode". Plan to also run a second
+  # yaml with checkpoint_path=stage1 + action_mode_list=[auto_only] if
+  # the first run shows interesting deltas.
+  checkpoint_path: "checkpoints/stage2_hybrid_N17/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [50.0, 65.0]
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_validation"

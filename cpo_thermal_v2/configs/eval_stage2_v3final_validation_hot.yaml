@@ -1,0 +1,33 @@
+# =====================================================================
+# eval_stage2_v3final_validation_hot.yaml — v3 final.pt eval (HOT)
+# =====================================================================
+# v3 final.pt eval — uses the actual stress-phase-trained policy
+# (global_step=1,503,232, full 1.5M training completed) instead of
+# best.pt (step 200k, hot phase).
+#
+# HOT regime is closer to where v2 collapsed (peak_T ≈ 67-68 °C, well
+# below T_pen=80) so the gate predicate would_violate_without_delay
+# rarely fires here either; v3 stress training in ambient [75,82] was
+# the curriculum intervention meant to push training peak_T into the
+# trigger zone.  This eval answers: did the stress-phase policy learn
+# to use the delay head, and does that translate to HOT-regime
+# evaluation?
+#
+# Same N=17 + seed_base=100000 as v3 best.pt eval so all 6 Ours variants
+# (s1, s2, v1, v2, v3-best, v3-final) remain paired.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_v3_stress_N33/final.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v3final_validation_hot"

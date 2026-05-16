@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=eval_phaseXA
-#SBATCH --account=yanjia
+#SBATCH --account=YOUR_SLURM_ACCOUNT
 #SBATCH --partition=a100x4
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1

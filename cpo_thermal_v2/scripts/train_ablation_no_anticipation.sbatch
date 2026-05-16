@@ -1,23 +1,22 @@
 #!/bin/bash
-#SBATCH --job-name=cpo_v2_stage2_hybrid_v2
+#SBATCH --job-name=cpo_v2_ablation_no_anticipation
 #SBATCH --account=YOUR_SLURM_ACCOUNT
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00                  # 24h budget (Stage 2 v2 ~3-6h)
-#SBATCH --output=logs/stage2_v2_%j.out
-#SBATCH --error=logs/stage2_v2_%j.err
+#SBATCH --time=24:00:00                  # 24h budget (Stage 2 ablation ~3h)
+#SBATCH --output=logs/ablation_no_anticipation_%j.out
+#SBATCH --error=logs/ablation_no_anticipation_%j.err
 # -------------------------------------------------------------------
-# CPO v2 — Stage 2 v2 (HK-1.5.8 fixes: gated anticipation_bonus + delay-loss warmup)
+# CPO v2 — Stage 2 ablation: zero anticipation_bonus
 #
-# Loads checkpoints/stage1_auto_only_N17/best.pt as warm start.
-# Trains the hybrid agent under the v2 reward shaping (anticipation_bonus
-# requires would_violate_without_delay) and v2 trainer (delay_loss_coef
-# linear-warmup over first 100k env-steps).
+# Tests the contribution of reward.anticipation_bonus (=0 in this run,
+# 1.5 in main Stage 2).  All other knobs unchanged.  Warm-starts from
+# Stage 1 best.pt (same as stage2_hybrid.yaml).
 #
-# Output: checkpoints/stage2_hybrid_v2_N17/
+# Output: checkpoints/stage2_ablation_no_anticipation_N17/
 # -------------------------------------------------------------------
 
 set -e
@@ -27,7 +26,7 @@ set -o pipefail
 cd "$SLURM_SUBMIT_DIR"
 export PYTHONPATH=".:${PYTHONPATH:-}"
 
-echo "[$(date)] Stage 2 v2 starting on node $(hostname)"
+echo "[$(date)] Stage 2 ablation (no_anticipation) starting on node $(hostname)"
 echo "  SLURM_JOB_ID = $SLURM_JOB_ID"
 echo "  cwd          = $(pwd)"
 echo "  GPU          = $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'none')"
@@ -40,7 +39,7 @@ conda activate cpo_drl
 mkdir -p logs
 
 # -------------------------------------------------------------------
-# Sanity: Stage 1 checkpoint must exist
+# Sanity: Stage 1 checkpoint must exist (warm-start source)
 # -------------------------------------------------------------------
 WARM_CKPT="checkpoints/stage1_auto_only_N17/best.pt"
 if [ ! -f "$WARM_CKPT" ]; then
@@ -53,9 +52,9 @@ echo "✅ found warm-start checkpoint: $WARM_CKPT"
 # -------------------------------------------------------------------
 # Train
 # -------------------------------------------------------------------
-echo "[$(date)] Launching Stage 2 v2 PPO trainer (hybrid, HK-1.5.8) ..."
+echo "[$(date)] Launching ablation (no_anticipation) PPO trainer ..."
 python -u -m cpo_thermal_v2.training.train \
-    --config cpo_thermal_v2/configs/stage2_hybrid_v2.yaml \
+    --config cpo_thermal_v2/configs/ablation_no_anticipation.yaml \
     "$@"
 
-echo "[$(date)] Stage 2 v2 done"
+echo "[$(date)] Stage 2 ablation (no_anticipation) done"

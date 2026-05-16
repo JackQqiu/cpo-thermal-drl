@@ -1,0 +1,31 @@
+# =====================================================================
+# eval_stage2_v3_validation_warm.yaml — Stage 2 v3 ckpt validation (WARM)
+# =====================================================================
+# v3 = HK-1.5.9 stress curriculum.  N=33 training ckpt evaluated under
+# N=17 (cross-N transfer test) for paired comparison with v1/v2/s1.
+# Cross-N transfer is feasible because the actor is cross-attention
+# factored — no fixed-N linear head bound to N=33.  Verified by
+# checkpoint shape probe before this eval.
+#
+# IMPORTANT — v3 best.pt was saved at global_step=200,704 with
+# stage='hot' (per ckpt metrics_summary).  best.pt was NOT captured
+# during the stress phase; it represents the late-hot policy.  Verdict
+# interpretation must account for this.
+#
+# Same seed_base as v1 / v2 -> paired Wilcoxon across the 5-way table.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_v3_stress_N33/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired with v1 / v2
+  device:          cpu
+  num_nodes_list:   [17]         # eval N=17 even though trained N=33
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [50.0, 65.0]      # WARM regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v3_validation_warm"

@@ -1,0 +1,28 @@
+# =====================================================================
+# ablation_no_anticipation.yaml — Stage 2 ablation: zero anticipation_bonus
+# =====================================================================
+# READY (yaml-only): RewardConfig.anticipation_bonus is a config-driven
+# scalar (defined at envs/reward_shaping.py:102, applied at line 406:
+# `d += float(cfg.anticipation_bonus)`).  Setting it to 0.0 disables the
+# positive reward signal that fires when the agent's chosen delay
+# successfully prevents a thermal violation, while preserving:
+#   - under_anticipate_pen (still fires when delay should have triggered)
+#   - all other reward components (placement, makespan, walls)
+#
+# Tests the paper §x.y claim: "the anticipation_bonus is what teaches
+# the agent to delay BEFORE peaks rather than just after".  Without it,
+# the agent should still learn safe placement (under_anticipate_pen
+# alone shapes the delay channel reactively) but should fail to
+# anticipate.
+#
+# Warm-start: same as stage2_hybrid (Stage 1 best.pt).
+# =====================================================================
+_inherit: stage2_hybrid
+
+reward:
+  anticipation_bonus: 0.0          # was 1.5 (RewardConfig default)
+
+logging:
+  run_name:        stage2_ablation_no_anticipation_N17
+  checkpoint_dir:  "checkpoints/stage2_ablation_no_anticipation_N17"
+  tb_log_dir:      "tb_logs/stage2_ablation_no_anticipation_N17"

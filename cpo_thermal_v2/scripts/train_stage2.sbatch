@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=cpo_v2_stage2_hybrid
-#SBATCH --account=yanjia
+#SBATCH --account=YOUR_SLURM_ACCOUNT
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1

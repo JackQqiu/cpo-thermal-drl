@@ -1,0 +1,47 @@
+# =====================================================================
+# ablation_no_rc_edge.yaml — Stage 2 ablation: drop RC coupling p2p edges
+# =====================================================================
+# !!!! BLOCKED — DO NOT SUBMIT !!!!
+# This ablation requires code changes that have NOT yet been made.
+# Submitting this yaml today will silently produce a normal Stage 2
+# run (the override fields are ignored by current code).  The
+# companion sbatch scripts/train_ablation_no_rc_edge.sbatch enforces
+# a hard fail to prevent accidental submission.
+#
+# Required code changes (do these first, then remove the BLOCKED
+# block below to enable):
+#   1. cpo_thermal_v2/envs/cpo_thermal_env.py
+#        - Add ctor kwarg `disable_rc_edge: bool = False`.
+#        - When True, _build_graph_obs() emits empty `edges_p2p` /
+#          `edges_p2p_attr` lists (existing empty-edge fast path in
+#          hetero_encoder.py:371 already handles this cleanly via
+#          (2,0) edge_index + (0, edge_dim_p2p) edge_attr).
+#   2. cpo_thermal_v2/training/env_factory.py
+#        - Read `env.disable_rc_edge` from config and forward to
+#          CPOThermalDAGEnvV2 ctor.
+#   3. (Optional, sanity) cpo_thermal_v2/models/ppo_actor_critic.py
+#        - Document that disabling RC edge does NOT change model
+#          architecture; encoder still has `p2p_layers` modules but
+#          they'll receive zero edges → no message passing through
+#          that channel.  No code change needed here.
+#
+# Architectural note: this disables the p2p edge ATTRIBUTE pathway
+# (the RC coupling matrix as edge attr).  The proc-proc nodes still
+# exist and the encoder's p2p_layers still run — they just see no
+# edges.  Cleaner than removing the layers entirely (which would
+# require fresh-from-scratch training; with-edge-zeroed allows
+# warm-starting from Stage 1).
+#
+# Warm-start: stage2_hybrid → Stage 1 best.pt (architecture unchanged).
+# =====================================================================
+_BLOCKED_DO_NOT_RUN: "Code support not yet implemented (see yaml header)."
+
+_inherit: stage2_hybrid
+
+env:
+  disable_rc_edge: true            # NOT YET HONORED BY env — needs code change
+
+logging:
+  run_name:        stage2_ablation_no_rc_edge_N17
+  checkpoint_dir:  "checkpoints/stage2_ablation_no_rc_edge_N17"
+  tb_log_dir:      "tb_logs/stage2_ablation_no_rc_edge_N17"

@@ -1,0 +1,47 @@
+# =====================================================================
+# eval_horizon_scan_v3.yaml — N=1000 horizon scan (was N=200 in v2)
+# =====================================================================
+# IDENTICAL to eval_horizon_scan.yaml (v2) except FOUR lines:
+#   1. num_episodes: 200 -> 1000
+#   2. decima_fair_ckpt added (use retrained baseline)
+#   3. scheduler_filter added (skip classical baselines — already saturated)
+#   4. output_dir: horizon_scan_v2 -> horizon_scan_v3
+#
+# scheduler_filter rationale:
+#   At N=200, classical baselines (HEFT/T-HEFT/RR) are already at
+#   199/200 unsafe rate. Going to N=1000 just gives 998/1000 — zero
+#   information gain. We skip them here and reuse v2's classical
+#   data for figure 4.
+# =====================================================================
+_inherit: default
+
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_N17/best.pt"
+  decima_fair_ckpt: "checkpoints/decima_fair_N17/best.pt"
+
+  num_episodes:    500
+  deterministic:   true
+  seed_base:       200000
+  device:          cpu
+
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, agent_only, hybrid]
+
+  # Only the thermally-aware schedulers + the new fair-Decima ablation.
+  scheduler_filter:
+    - Decima
+    - Ours-auto_only
+    - Ours-agent_only
+    - Ours-hybrid
+
+  T_target: 75.0
+
+  initial_temp_range: [50.0, 65.0]
+  max_dag_size:       null
+  dags_per_episode:   50
+
+  truncate_mode:        hard
+  soft_truncate_recovery_temp: 75.0
+  max_soft_recovery_steps:     200
+
+  output_dir:      "eval_results/horizon_scan_v3/_default"

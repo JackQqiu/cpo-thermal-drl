@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=hgate_ppo
-#SBATCH --account=yanjia
+#SBATCH --account=YOUR_SLURM_ACCOUNT
 #SBATCH --partition=a100x4
 #SBATCH --gres=gpu:1                       # cluster CPU-per-GPU policy:
                                            # `gpu` partition: 5 cpus per gpu

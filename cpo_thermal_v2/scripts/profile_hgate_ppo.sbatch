@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=hgate_prof
-#SBATCH --account=yanjia
+#SBATCH --account=YOUR_SLURM_ACCOUNT
 #SBATCH --partition=a100x4
 #SBATCH --gres=gpu:1                       # a100x4 partition gives 16 cpus
                                            # per single A100; no need to

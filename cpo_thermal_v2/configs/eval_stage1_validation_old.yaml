@@ -1,0 +1,21 @@
+# =====================================================================
+# eval_stage1_validation_old.yaml
+# =====================================================================
+# Stage 1 ckpt validation — OLD buggy ckpt (pre Stage 0 / HK fixes).
+# Re-evaluated in the FIXED env to measure ROI of cleanup work.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints_old/stage1_auto_only_N17/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only]
+  scheduler_filter: ["Ours-auto_only"]
+  T_target:           75.0
+  initial_temp_range: [50.0, 65.0]
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage1_validation_old"

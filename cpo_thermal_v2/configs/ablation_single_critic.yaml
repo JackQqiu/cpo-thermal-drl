@@ -1,0 +1,50 @@
+# =====================================================================
+# ablation_single_critic.yaml — Stage 2 ablation: single critic head
+# =====================================================================
+# !!!! BLOCKED — DO NOT SUBMIT !!!!
+# This ablation requires code changes that have NOT yet been made.
+# Submitting this yaml today will silently produce a normal Stage 2
+# run (the override fields are ignored by current train.py, which has
+# no `dual_critic` plumbing yet).  The companion sbatch
+# scripts/train_ablation_single_critic.sbatch enforces a hard fail to
+# prevent accidental submission.
+#
+# Required code changes (do these first, then remove the BLOCKED block
+# below to enable):
+#   1. cpo_thermal_v2/models/value_critic.py
+#        - Add `class SingleCritic(nn.Module)` returning a single (B,)
+#          tensor from the same pooled trunk.
+#   2. cpo_thermal_v2/models/ppo_actor_critic.py
+#        - PPOActorCritic.__init__: add kwarg `dual_critic: bool = True`
+#        - Conditional: `self.critic = DualCritic(...) if dual_critic
+#          else SingleCritic(...)`
+#        - Adjust evaluate_actions / get_value to handle both shapes
+#          (DualCritic returns (v_p, v_d); SingleCritic returns v).
+#          Convention when single: v_p = v_d = v (so downstream loss
+#          decomposition stays additive but uses the same V).
+#   3. cpo_thermal_v2/training/train.py:289
+#        - Read model_cfg.get("dual_critic", True) and pass to
+#          PPOActorCritic ctor.
+#   4. cpo_thermal_v2/training/ppo_trainer.py
+#        - The placement/delay advantage decomposition still computes
+#          two A's, but with shared V they collapse to A_p + A_d = A_total.
+#          Verify gradient flow is unchanged in single-critic mode.
+#   5. (Optional, cleaner) Add `model.dual_critic` documentation to
+#      configs/default.yaml so the flag has a discoverable home.
+#
+# Warm-start: stage2_hybrid → Stage 1 best.pt.  The critic head will
+# be reinitialised either way (Stage 1 ckpt only has V_placement; the
+# delay head was disabled-gradient and will be re-init for hybrid; for
+# single critic, the unified V is also fresh init).
+# =====================================================================
+_BLOCKED_DO_NOT_RUN: "Code support not yet implemented (see yaml header)."
+
+_inherit: stage2_hybrid
+
+model:
+  dual_critic: false               # NOT YET HONORED BY train.py — needs code change
+
+logging:
+  run_name:        stage2_ablation_single_critic_N17
+  checkpoint_dir:  "checkpoints/stage2_ablation_single_critic_N17"
+  tb_log_dir:      "tb_logs/stage2_ablation_single_critic_N17"

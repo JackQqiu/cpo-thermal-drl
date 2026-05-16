@@ -1,0 +1,31 @@
+# =====================================================================
+# eval_stage2_v3_validation_hot.yaml — Stage 2 v3 ckpt validation (HOT)
+# =====================================================================
+# v3 = HK-1.5.9 stress curriculum.  HOT regime is the operating point
+# where the would_violate_without_delay gate would actually fire in
+# v2 — v3's hypothesis is that stress training revives the delay head's
+# value where v2 collapsed to delay_idx=0.
+#
+# Same seed_base as v1 / v2 -> paired Wilcoxon across the 5-way table.
+# Cross-N transfer (N=33 train -> N=17 eval); see warm yaml header
+# for the ckpt-shape feasibility argument.
+#
+# IMPORTANT — v3 best.pt was saved at global_step=200,704 with
+# stage='hot'; best.pt represents the late-hot policy, NOT the
+# stress-curriculum-trained one.
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_v3_stress_N33/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_v3_validation_hot"

@@ -1,0 +1,32 @@
+# =====================================================================
+# eval_stage2_validation_hot.yaml
+# =====================================================================
+# Stage 2 ckpt validation — three-way paired comparison in HOT regime.
+#
+# This is the operating point where Stage 2 hybrid's anticipatory delay
+# action is meant to demonstrate value: peak_T approaches T_pen=80 and
+# the delay head has thermal pressure to absorb. Warm regime [50,65]
+# saturated thermal margin (peak_T 64°C with auto_only alone), leaving
+# the delay head with no headroom to outperform — see
+# eval_results/stage2_validation/ for warm-regime results.
+#
+# Cells (all share seed_base=100000 -> paired across schedulers):
+#   1. HEFT
+#   2. Ours-auto_only (stage2 ckpt under auto_only)
+#   3. Ours-hybrid    (stage2 ckpt under hybrid)
+# =====================================================================
+_inherit: default
+eval:
+  checkpoint_path: "checkpoints/stage2_hybrid_N17/best.pt"
+  num_episodes:    50
+  deterministic:   true
+  seed_base:       100000        # paired
+  device:          cpu
+  num_nodes_list:   [17]
+  action_mode_list: [auto_only, hybrid]
+  scheduler_filter: [HEFT, "Ours-auto_only", "Ours-hybrid"]
+  T_target:           75.0
+  initial_temp_range: [60.0, 75.0]      # HOT regime — key change
+  max_dag_size:       null
+  dags_per_episode:   20
+  output_dir: "eval_results/stage2_validation_hot"
