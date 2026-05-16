@@ -1,28 +1,17 @@
 # CPO Thermal-Aware DAG Scheduler
 
-Thermal-aware microservice DAG scheduling for Co-Packaged Optics (CPO)
-data centres, using a heterogeneous GNN encoder and factored PPO with
-a two-stage curriculum.  Accompanies a paper submitted to IEEE TPDS / TC.
+Thermal-aware microservice DAG scheduling for Co-Packaged Optics (CPO) data centres. A heterogeneous graph encoder with a cross-attention factored actor and dual-channel critic, trained with PPO under a two-stage curriculum.
 
-For full architectural and deployment details, see
-[`cpo_thermal_v2/README.md`](cpo_thermal_v2/README.md).
+This repository accompanies a manuscript submitted to *MDPI Electronics* (2026).
 
 ---
 
-## What the code does
+## Method at a glance
 
-* Simulates an ASIC + N OE accelerators coupled by an RC thermal
-  network, scheduling Alibaba microservice DAGs onto them under
-  thermal constraints.
-* Trains a heterogeneous GNN policy with **factored actions**
-  (placement + delay), each with its own reward channel, advantage,
-  and value head — so the two decisions can learn independently.
-* Trains in **two stages**: Stage 1 learns placement under env auto-cool;
-  Stage 2 warm-starts and unlocks the agent-controlled delay head.
-* Evaluates against four baselines (Round-Robin, HEFT, Thermal-HEFT,
-  Decima-style RL) at five topology sizes (N ∈ {9, 13, 17, 24, 33})
-  zero-shot, and emits CSVs, IEEE-style PDF figures, and ready-to-paste
-  LaTeX tables.
+- **Environment**: An ASIC plus `N-1` optical engines on a shared interposer, coupled by a calibrated RC thermal network. Microservice DAGs from the Alibaba 2021 trace are dispatched onto the processors under a hard thermal cap.
+- **Policy**: A heterogeneous-graph encoder (3-layer GATv2 over task / processor / RC-coupling relations) feeds a cross-attention placement head plus a pooled-MLP delay head. A shared-trunk critic emits two value channels aligned with the placement and thermal components of the reward.
+- **Training**: PPO with a thermal-aware reward and a two-stage curriculum — Stage 1 trains placement only, Stage 2 warm-starts and enables the anticipatory delay head.
+- **Generalisation**: The encoder forward pass is parametric in `N`, so a single trained policy transfers zero-shot across `N ∈ {9, 13, 17, 24, 33}` processors.
 
 ---
 
@@ -30,75 +19,60 @@ For full architectural and deployment details, see
 
 ```bash
 git clone <repo_url>
-cd <repo>
+cd cpo_project
 conda create -n cpo_rl python=3.10
 conda activate cpo_rl
 pip install -r requirements.txt
 ```
 
-If `torch_geometric` install fails, install torch first then follow the
-[official PyG install matrix](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html)
-to pick the wheel index for your CUDA version.
+If `torch_geometric` install fails, install PyTorch first, then follow the [PyG install matrix](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html) for your CUDA version.
 
 ---
 
-## Configuration
-
-All experiments are driven by YAML configs in `cpo_thermal_v2/configs/`,
-which inherit from a shared `default.yaml`:
-
-```
-configs/
-├── default.yaml             # shared defaults
-├── stage1_auto_only.yaml    # Stage 1 training
-├── stage2_hybrid.yaml       # Stage 2 (warm-starts from Stage 1)
-└── eval_scaling.yaml        # full evaluation grid
-```
-
-Override any field from the CLI:
+## Quick start
 
 ```bash
-PYTHONPATH=. python -m cpo_thermal_v2.training.train \
-    --config cpo_thermal_v2/configs/stage1_auto_only.yaml \
-    --override training.total_steps=10000 \
-    --override training.device=cuda:0
+# Local smoke test (CPU, ~2 min)
+python -m cpo_thermal_v2.scripts.sanity_check_maybe_precool_fix
 ```
 
 ---
 
-## Training
+## Training and evaluation
 
-The pipeline is three SLURM jobs, run in sequence:
+Cluster training (one V100 / A100):
 
 ```bash
-# Stage 1: placement-only training (~9h on V100)
+# Stage 1: placement-only (3M steps, ~6h on V100)
 sbatch cpo_thermal_v2/scripts/train_stage1.sbatch
 
-# Stage 2: hybrid warm-start, unlocks delay head (~4h on V100)
+# Stage 2: warm-started hybrid (1.5M steps, ~3h)
 sbatch cpo_thermal_v2/scripts/train_stage2.sbatch
-
-# Stage E: full evaluation grid + figures + LaTeX tables (~12h on V100)
-sbatch cpo_thermal_v2/scripts/eval_scaling.sbatch
 ```
 
-Or chained with SLURM dependencies:
+Edit the `--account=YOUR_SLURM_ACCOUNT` line in each `.sbatch` to match your cluster.
+
+Reproducing paper tables and figures (after training):
 
 ```bash
-JOB1=$(sbatch --parsable cpo_thermal_v2/scripts/train_stage1.sbatch)
-JOB2=$(sbatch --parsable --dependency=afterok:$JOB1 \
-              cpo_thermal_v2/scripts/train_stage2.sbatch)
-sbatch --dependency=afterok:$JOB2 \
-       cpo_thermal_v2/scripts/eval_scaling.sbatch
+# §5.2 main results table (hot N=17, n=500 paired episodes)
+python -m cpo_thermal_v2.scripts.eval_grand_matrix --regime hot
+
+# §5.4 generalisation envelope (5 sizes × 4 ambient regimes)
+sbatch cpo_thermal_v2/scripts/eval_scaling.sbatch
+
+# §5.6 auto-cool ablation
+python -m cpo_thermal_v2.scripts.eval_autocool_ablation
+
+# §5.6 RC-coupling edge isolation
+python -m cpo_thermal_v2.scripts.eval_ours_no_rc_edge_paired
+
+# §6.2 inference latency
+python -m cpo_thermal_v2.scripts.measure_latency \
+    --ckpt checkpoints/stage2_hybrid_N17/best.pt --N 17 --mode hybrid
 ```
 
-Total wall time: ~25-28h end-to-end on a single V100.
-
-Output goes to `eval_results/scaling_v2/` — CSVs, PDF figures, and
-`*.tex` table files ready to paste into the manuscript.
-
-For a 2-minute local sanity check on Mac/CPU before launching real
-training, see
-[`cpo_thermal_v2/README.md#quick-start`](cpo_thermal_v2/README.md#quick-start).
+Output goes to `eval_results/` as CSVs.
 
 ---
 
@@ -106,14 +80,15 @@ training, see
 
 ```
 cpo_thermal_v2/
-├── envs/            — gymnasium env, RC dynamics, DAG parser, reward
-├── models/          — GNN encoder, factored actor, dual critic
-├── data_pipeline/   — Alibaba trace enrichment, RC matrix generation
-├── training/        — PPO trainer, GAE, rollout buffer, curriculum
-├── baselines/       — Round-Robin, HEFT, Thermal-HEFT, Decima
-├── evaluation/      — episode/DAG metrics, plots, LaTeX tables
-├── configs/         — YAML configs (with inheritance)
-└── scripts/         — SLURM sbatch files
+├── envs/            gymnasium env, RC dynamics, DAG parser, reward shaping
+├── models/          hetero GATv2 encoder, cross-attention actor, dual critic
+├── data_pipeline/   Alibaba trace enrichment, RC matrix generation
+├── training/        PPO trainer, GAE, rollout buffer, curriculum
+├── baselines/       HEFT, Thermal-HEFT, Round-Robin, Decima (vanilla + thermal),
+│                    HGATE-PPO, D2 (homog trunk + our actor), Throttled-HEFT
+├── evaluation/      paired-episode evaluator, McNemar / Wilcoxon statistics
+├── configs/         YAML configs (training, ablations, evaluation matrix)
+└── scripts/         cluster launchers and evaluation scripts
 ```
 
 ---
@@ -121,12 +96,13 @@ cpo_thermal_v2/
 ## Citation
 
 ```bibtex
-@article{cpo_thermal_v2_2026,
+@article{cpo_thermal_2026,
   title   = {Thermal-Aware Microservice DAG Scheduling for Co-Packaged
-             Optics Data Centers via Proximal Policy Optimization},
-  author  = {…},
-  journal = {IEEE Transactions on Parallel and Distributed Systems},
+             Optics Data Centres via Proximal Policy Optimization},
+  author  = {Qiu, Jack},
+  journal = {Electronics},
   year    = {2026},
+  note    = {Under review.}
 }
 ```
 
@@ -134,4 +110,4 @@ cpo_thermal_v2/
 
 ## License
 
-(To be specified — likely MIT.)
+MIT — see [LICENSE](LICENSE).

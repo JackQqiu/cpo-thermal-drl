@@ -63,3 +63,8 @@ trace_data/
 # Large dataset files (Alibaba 2021 trace, processed DAGs)
 cpo_thermal_v2/data_pipeline/process/*.json
 data_pipeline/process/*.json
+
+# Internal project notes (kept local, not for public release)
+CLAUDE.md
+.planning/
+paper_drafts/
