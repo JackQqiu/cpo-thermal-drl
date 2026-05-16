@@ -134,19 +134,24 @@ def main() -> None:
                alpha=0.7)
     ax.axvline(1.5e6, color="#888888", linestyle=":", linewidth=0.45,
                alpha=0.7)
-    # auto_only labels (top half of plot)
+    # Each label is anchored next to ITS OWN curve's y-band:
+    # hybrid curve sits in the upper half of the plot (return 700-980),
+    # so the red hybrid labels go in the upper band; auto_only sits in
+    # the lower half (dips to ~100, recovers to ~830), so blue
+    # auto_only labels go in the lower band.
+    # hybrid labels — upper band
     ax.text(0.4e6, ax.get_ylim()[1] * 0.96,
-            r" auto\_only: cold$\to$warm", fontsize=7, color=AUTO_BLUE,
-            ha="left", va="top", rotation=90)
-    ax.text(1.5e6, ax.get_ylim()[1] * 0.96,
-            r" auto\_only: warm$\to$hot", fontsize=7, color=AUTO_BLUE,
-            ha="left", va="top", rotation=90)
-    # hybrid labels (lower half of plot, anchored at ~y=370/y=370)
-    ax.text(0.4e6, ax.get_ylim()[1] * 0.46,
             r" hybrid: warm$\to$hot", fontsize=7, color=HYB_RED,
             ha="left", va="top", rotation=90)
-    ax.text(1.5e6, ax.get_ylim()[1] * 0.46,
+    ax.text(1.5e6, ax.get_ylim()[1] * 0.96,
             r" hybrid: training end", fontsize=7, color=HYB_RED,
+            ha="left", va="top", rotation=90)
+    # auto_only labels — lower band
+    ax.text(0.4e6, ax.get_ylim()[1] * 0.46,
+            r" auto\_only: cold$\to$warm", fontsize=7, color=AUTO_BLUE,
+            ha="left", va="top", rotation=90)
+    ax.text(1.5e6, ax.get_ylim()[1] * 0.46,
+            r" auto\_only: warm$\to$hot", fontsize=7, color=AUTO_BLUE,
             ha="left", va="top", rotation=90)
 
     _save_pdf_and_svg(fig, "fig_training_curves")
