@@ -113,22 +113,16 @@ def main() -> None:
     ax_a.axvline(80, color="#c0392b", linestyle="--",
                  linewidth=0.95, alpha=0.8)
     ax_a.axvspan(80, 100, color="#c0392b", alpha=0.06, zorder=0)
-    # T_pen label: placed at the BOTTOM of the chart inside the
-    # unsafe-shaded band — at x=81, y~0.05 the HEFT family curves are
-    # still at 0 (their CDFs don't lift until x>85), so this region
-    # is empty regardless of the bimodal Decima-thermal / D2 curves
-    # above. White bounding box gives extra contrast.
-    ax_a.text(81, 0.04, r"$T_{\mathrm{pen}}{=}80\,^\circ$C",
-              fontsize=7.5, color="#c0392b",
-              ha="left", va="bottom", rotation=90,
-              bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
-                         edgecolor="none", alpha=0.92))
+    # T_pen value is embedded in the panel title below to avoid any
+    # in-chart overlap with the per-scheduler CDF curves. The red
+    # dashed vertical line + shaded unsafe band still mark x=80.
     ax_a.set_xlim(60, 100)
     ax_a.set_ylim(-0.02, 1.02)
     ax_a.set_xlabel("Peak temperature per episode ($^\\circ$C)")
     ax_a.set_ylabel("Empirical CDF")
     _add_panel_label(ax_a, "a")
-    ax_a.text(0.5, 1.04, "Peak-temperature distribution",
+    ax_a.text(0.5, 1.04,
+              r"Peak-temperature distribution ($T_{\mathrm{pen}}{=}80\,^\circ$C)",
               transform=ax_a.transAxes,
               fontsize=9.5, ha="center", va="bottom", fontweight="bold")
     ax_a.grid(True, which="major", linestyle=":",
