@@ -1,8 +1,8 @@
-# CPO Thermal-Aware DAG Scheduler
+# Permutation-Equivariant Graph RL for Thermal-Aware Scheduling on CPO
 
-Thermal-aware microservice DAG scheduling for Co-Packaged Optics (CPO) data centres. A heterogeneous graph encoder with a cross-attention factored actor and dual-channel critic, trained with PPO under a two-stage curriculum.
+Thermal-aware microservice DAG scheduling for Co-Packaged Optics (CPO) data centres. A permutation-equivariant heterogeneous graph encoder with a cross-attention factored actor and dual-channel critic, trained with PPO under a two-stage curriculum.
 
-This repository accompanies a manuscript submitted to *MDPI Electronics* (2026).
+This repository accompanies the manuscript *Permutation-Equivariant Graph Reinforcement Learning for Thermal-Aware Microservice Scheduling in Co-Packaged Optics Data Centers*, submitted to *MDPI Symmetry* (2026).
 
 ---
 
@@ -96,11 +96,13 @@ cpo_thermal_v2/
 ## Citation
 
 ```bibtex
-@article{cpo_thermal_2026,
-  title   = {Thermal-Aware Microservice DAG Scheduling for Co-Packaged
-             Optics Data Centres via Proximal Policy Optimization},
-  author  = {Qiu, Jack},
-  journal = {Electronics},
+@article{qiu2026cpo,
+  title   = {Permutation-Equivariant Graph Reinforcement Learning for
+             Thermal-Aware Microservice Scheduling in Co-Packaged
+             Optics Data Centers},
+  author  = {Qiu, Zhaoqi and Peng, Linya and Fan, Fuming and Zuo, Haoran
+             and Qiu, Wenjie and Xu, Bo and Deng, Tianping},
+  journal = {Symmetry},
   year    = {2026},
   note    = {Under review.}
 }
