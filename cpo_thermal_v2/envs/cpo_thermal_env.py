@@ -265,6 +265,13 @@ class CPOThermalDAGEnvV2(gym.Env):
         rc_A: Optional[np.ndarray] = None,
         rc_B: Optional[np.ndarray] = None,
         rc_D: Optional[np.ndarray] = None,
+        # ---- decoupled-mismatch hooks (R2.1 sensitivity sweep, eval-only) ----
+        # When set, the agent's OBSERVATION uses these NOMINAL (calibrated)
+        # values while the plant steps with the (perturbed) rc_A / leakage
+        # above. None => observation == plant (current behaviour, training).
+        rc_A_obs: Optional[np.ndarray] = None,
+        leakage_obs_base_power: Optional[float] = None,
+        leakage_obs_beta: Optional[float] = None,
     ):
         super().__init__()
 
@@ -326,6 +333,15 @@ class CPOThermalDAGEnvV2(gym.Env):
         self.oe_conversion_delay_ms = oe_conversion_delay_ms
         self.leakage_base_power     = leakage_base_power
         self.leakage_beta           = leakage_beta
+        # Observation-side leakage (R2.1 decoupled sweep): default to the plant
+        # values so observation == plant unless explicitly overridden.
+        self.leakage_obs_base_power = (
+            leakage_obs_base_power if leakage_obs_base_power is not None
+            else leakage_base_power
+        )
+        self.leakage_obs_beta = (
+            leakage_obs_beta if leakage_obs_beta is not None else leakage_beta
+        )
 
         # -------- temp-rise heuristics --------
         self.temp_rise_per_ms_asic = temp_rise_per_ms_asic
@@ -370,6 +386,10 @@ class CPOThermalDAGEnvV2(gym.Env):
         )
 
         # -------- proc-proc edge cache (from RC matrix A) --------
+        # R2.1 decoupled sweep: observation edges derive from the NOMINAL A
+        # (rc_A_obs) when provided, while the engine steps with the perturbed A.
+        # Default None => use the engine's own A (observation == plant).
+        self._A_obs = rc_A_obs if rc_A_obs is not None else None
         self._cached_p2p_edges, self._cached_p2p_attrs = self._extract_thermal_edges()
 
         # -------- dataset --------
@@ -490,7 +510,11 @@ class CPOThermalDAGEnvV2(gym.Env):
         """
         edges:  List[List[int]]   = []
         attrs:  List[List[float]] = []
-        A = self.thermal_engine.A
+        # Observation A: nominal (rc_A_obs) for the decoupled R2.1 sweep, else
+        # the engine's (plant) A. getattr guard is robust if _A_obs is unset.
+        A = getattr(self, "_A_obs", None)
+        if A is None:
+            A = self.thermal_engine.A
         for i in range(self.num_nodes):
             for j in range(self.num_nodes):
                 if i == j:
@@ -988,8 +1012,8 @@ class CPOThermalDAGEnvV2(gym.Env):
         T_prev_i = float(np.clip(self.prev_temperatures[i],          -50.0, T_max))
         # Leakage exponent capped so np.exp() can never overflow float32.
         # exp(0.015 * (200-25)) = exp(2.625) ≈ 13.8, finite by design.
-        leakage  = self.leakage_base_power * float(np.exp(
-            self.leakage_beta * (T_i - 25.0)
+        leakage  = self.leakage_obs_base_power * float(np.exp(
+            self.leakage_obs_beta * (T_i - 25.0)
         ))
         feats = [
             (T_i - 25.0) / 60.0,                                  # 0 norm temp
