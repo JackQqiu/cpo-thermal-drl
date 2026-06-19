@@ -84,12 +84,15 @@ class PPOActorCritic(nn.Module):
         dropout:      float = 0.1,
         # Critic hyperparam
         critic_hidden: int = 256,
+        # Constrained (Lagrangian/RCPO) variant: add a cost value head.
+        enable_cost: bool = False,
     ):
         super().__init__()
         if action_mode not in ("auto_only", "agent_only", "hybrid"):
             raise ValueError(f"unknown action_mode: {action_mode!r}")
         self.action_mode = action_mode
         self.K_delay     = K_delay
+        self.enable_cost = bool(enable_cost)
 
         self.encoder = HeteroEncoder(
             task_in_dim=task_in_dim, proc_in_dim=proc_in_dim,
@@ -100,7 +103,8 @@ class PPOActorCritic(nn.Module):
         self.actor = CrossAttentionActor(
             hidden=hidden, K_delay=K_delay, num_heads=num_heads,
         )
-        self.critic = DualCritic(hidden=hidden, trunk_hidden=critic_hidden)
+        self.critic = DualCritic(hidden=hidden, trunk_hidden=critic_hidden,
+                                 enable_cost=enable_cost)
 
     # =================================================================
     # Internal: encoder + actor forward pass
@@ -174,13 +178,14 @@ class PPOActorCritic(nn.Module):
             current_idx_within_graph=current_idx,
             action_mask=action_mask,
         )
-        v_p, v_d = self.critic(x_task, x_proc, batch_task, batch_proc, B)
+        v_p, v_d, v_cost = self.critic(x_task, x_proc, batch_task, batch_proc, B)
         return {
             "placement_logits": actor_out["placement_logits"],
             "delay_logits":     actor_out["delay_logits"],
             "placement_mask":   actor_out["placement_mask"],
             "v_placement":      v_p,
             "v_delay":          v_d,
+            "v_cost":           v_cost,
             "batch_size":       B,
         }
 
@@ -231,6 +236,7 @@ class PPOActorCritic(nn.Module):
                     "entropy_d":   torch.zeros_like(entropy_p),
                     "v_placement": out["v_placement"],
                     "v_delay":     out["v_delay"],
+                    "v_cost":      out["v_cost"],
                 }
             else:
                 # agent_only / hybrid
@@ -253,6 +259,7 @@ class PPOActorCritic(nn.Module):
                     "entropy_d":   entropy_d,
                     "v_placement": out["v_placement"],
                     "v_delay":     out["v_delay"],
+                    "v_cost":      out["v_cost"],
                 }
         finally:
             if was_training:
@@ -302,6 +309,7 @@ class PPOActorCritic(nn.Module):
                     "entropy_d":   torch.zeros_like(entropy_p),
                     "v_placement": out["v_placement"],
                     "v_delay":     out["v_delay"],
+                    "v_cost":      out["v_cost"],
                 }
             else:
                 # agent_only / hybrid
@@ -326,6 +334,7 @@ class PPOActorCritic(nn.Module):
                     "entropy_d":   entropy_d,
                     "v_placement": out["v_placement"],
                     "v_delay":     out["v_delay"],
+                    "v_cost":      out["v_cost"],
                 }
         finally:
             if was_training:
@@ -336,15 +345,17 @@ class PPOActorCritic(nn.Module):
     # Public: get_value (used to bootstrap the GAE return at episode tail)
     # =================================================================
     @torch.no_grad()
-    def get_value(self, batch: Batch) -> Tuple[torch.Tensor, torch.Tensor]:
+    def get_value(self, batch: Batch, include_cost: bool = False):
         was_training = self.training
         self.eval()
         try:
             out = self._forward_features(batch)
-            v_p, v_d = out["v_placement"], out["v_delay"]
+            v_p, v_d, v_cost = (out["v_placement"], out["v_delay"], out["v_cost"])
         finally:
             if was_training:
                 self.train()
+        if include_cost:
+            return v_p, v_d, v_cost
         return v_p, v_d
 
 

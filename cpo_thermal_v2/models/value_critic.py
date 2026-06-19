@@ -55,6 +55,7 @@ class DualCritic(nn.Module):
         self,
         hidden:      int = 128,
         trunk_hidden: int = 256,
+        enable_cost: bool = False,
     ):
         super().__init__()
         # Pooled feature dim:
@@ -68,6 +69,14 @@ class DualCritic(nn.Module):
         )
         self.value_placement = nn.Linear(trunk_hidden, 1)
         self.value_delay     = nn.Linear(trunk_hidden, 1)
+        # Optional third head for the Lagrangian/RCPO constrained variant:
+        # V_cost(s) predicts the discounted return of the thermal CONSTRAINT
+        # cost (per-step violation indicator).  Gated so the default critic
+        # is byte-identical (no extra params, no RNG-stream shift) when
+        # enable_cost=False — only the constrained baseline sets it True.
+        self.enable_cost = bool(enable_cost)
+        if self.enable_cost:
+            self.value_cost = nn.Linear(trunk_hidden, 1)
 
     def forward(
         self,
@@ -76,8 +85,12 @@ class DualCritic(nn.Module):
         batch_task: torch.Tensor,    # (sum_tasks,)
         batch_proc: torch.Tensor,    # (sum_proc,)
         batch_size: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return ``(V_placement, V_delay)`` each of shape ``(batch_size,)``."""
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``(V_placement, V_delay, V_cost)`` each of shape ``(batch_size,)``.
+
+        ``V_cost`` is all-zeros (and carries no gradient) when the cost head
+        is disabled, leaving the placement/delay path unaffected.
+        """
         # Robust pooling.  Edge case: a graph with zero tasks (shouldn't
         # happen with valid env output, but defensive: replace by zeros).
         if x_task.numel() > 0:
@@ -93,4 +106,8 @@ class DualCritic(nn.Module):
 
         v_p = self.value_placement(h).squeeze(-1)   # (B,)
         v_d = self.value_delay(h).squeeze(-1)       # (B,)
-        return v_p, v_d
+        if self.enable_cost:
+            v_cost = self.value_cost(h).squeeze(-1)  # (B,)
+        else:
+            v_cost = torch.zeros_like(v_p)
+        return v_p, v_d, v_cost

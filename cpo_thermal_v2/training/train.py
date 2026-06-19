@@ -284,6 +284,17 @@ def train(config: Dict[str, Any]) -> None:
               f"({curriculum.current.initial_temp_range}, "
               f"max_dag_size={curriculum.current.max_dag_size})")
 
+    # ---------------- Lagrangian / RCPO constrained variant ----------------
+    # Opt-in via a `training.lagrangian` block.  Absent ⇒ standard Ours PPO
+    # (enable_cost=False ⇒ no cost head, byte-identical training).
+    lag_cfg = train_cfg.get("lagrangian") or {}
+    lagrangian_enabled = bool(lag_cfg.get("enabled", False))
+    if lagrangian_enabled:
+        print(f"  [Lagrangian/RCPO] ON  cost_limit={lag_cfg.get('cost_limit')}  "
+              f"lam_init={lag_cfg.get('lam_init', 0.0)}  lam_lr={lag_cfg.get('lam_lr', 0.0)}  "
+              f"lam_max={lag_cfg.get('lam_max', 10.0)}  "
+              f"cost_signal={lag_cfg.get('cost_signal', 'would_violate')!r}")
+
     # ---------------- Model + optimiser ----------------
     model_cfg = config["model"]
     model = PPOActorCritic(
@@ -300,6 +311,7 @@ def train(config: Dict[str, Any]) -> None:
         num_heads   = model_cfg["num_heads"],
         dropout     = model_cfg["dropout"],
         critic_hidden = model_cfg["critic_hidden"],
+        enable_cost = lagrangian_enabled,
     ).to(device)
 
     # Thermal-blind flag: if True, build_batch strips proc_x cols 0:4
@@ -354,6 +366,12 @@ def train(config: Dict[str, Any]) -> None:
         # Default 0 = no warmup (pre-HK-1.5.8 behaviour).
         action_mode        = config["env"]["action_mode"],
         delay_warmup_steps = int(train_cfg.get("delay_warmup_steps", 0)),
+        # Lagrangian / RCPO constrained variant (inert unless enabled)
+        lagrangian = lagrangian_enabled,
+        cost_limit = float(lag_cfg.get("cost_limit", 0.0)),
+        lam_init   = float(lag_cfg.get("lam_init", 0.0)),
+        lam_lr     = float(lag_cfg.get("lam_lr", 0.0)),
+        lam_max    = float(lag_cfg.get("lam_max", 10.0)),
     )
 
     # ---------------- Rollout buffer + reward normaliser ----------------
@@ -470,6 +488,20 @@ def train(config: Dict[str, Any]) -> None:
             # 3. Extract dual-channel rewards
             rp, rd = _extract_reward_channels(next_info, num_envs)
 
+            # 3b. Lagrangian cost signal (per-step violation indicator).
+            # Reuses the env's existing `would_violate_without_delay` info key
+            # (the same signal logged as env/violation_rate).  Raw 0/1, NOT
+            # reward-normalised — the dual variable needs the true scale.
+            if lagrangian_enabled:
+                from cpo_thermal_v2.training.env_factory import _extract_per_env
+                wv_list = _extract_per_env(next_info, "would_violate_without_delay", num_envs)
+                rc = np.zeros(num_envs, dtype=np.float32)
+                for n in range(num_envs):
+                    if wv_list[n] is not None:
+                        rc[n] = float(wv_list[n])
+            else:
+                rc = None
+
             # 4. (Optional) reward normalisation per channel
             if norm_p is not None:
                 rp_n = norm_p.update_and_normalise(rp, done)
@@ -516,6 +548,8 @@ def train(config: Dict[str, Any]) -> None:
                 values_d    = act_out["v_delay"],
                 rewards_p   = rp_n,
                 rewards_d   = rd_n,
+                values_cost = act_out["v_cost"] if lagrangian_enabled else None,
+                rewards_cost= rc,
                 dones       = done,
             )
 
@@ -538,10 +572,11 @@ def train(config: Dict[str, Any]) -> None:
         with torch.no_grad():
             tail_batch = build_batch(graph_obs_list, action_masks,
                                      device=device, thermal_blind=thermal_blind)
-            v_p_tail, v_d_tail = model.get_value(tail_batch)
+            v_p_tail, v_d_tail, v_cost_tail = model.get_value(tail_batch, include_cost=True)
 
         # ============ PPO UPDATE ============
-        metrics: PPOUpdateMetrics = trainer.update(buffer, v_p_tail, v_d_tail)
+        metrics: PPOUpdateMetrics = trainer.update(buffer, v_p_tail, v_d_tail,
+                                                   last_values_cost=v_cost_tail)
         update_phase += 1
         if lr_scheduler is not None:
             lr_scheduler.step()
@@ -565,6 +600,10 @@ def train(config: Dict[str, Any]) -> None:
         writer.add_scalar("advantage/p_std",    metrics.advantage_p_std,  global_step)
         writer.add_scalar("advantage/d_mean",   metrics.advantage_d_mean, global_step)
         writer.add_scalar("advantage/d_std",    metrics.advantage_d_std,  global_step)
+        if lagrangian_enabled:
+            writer.add_scalar("lagrangian/lambda",           metrics.lam,              global_step)
+            writer.add_scalar("lagrangian/cost_per_episode", metrics.cost_per_episode, global_step)
+            writer.add_scalar("loss/value_cost",             metrics.loss_value_cost,  global_step)
 
         if rolling_returns:
             recent = rolling_returns[-100:]

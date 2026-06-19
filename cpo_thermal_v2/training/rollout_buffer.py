@@ -99,6 +99,11 @@ class RolloutBuffer:
         self.values_d    = torch.zeros(self.T, self.N, device=device)
         self.rewards_p   = torch.zeros(self.T, self.N, device=device)
         self.rewards_d   = torch.zeros(self.T, self.N, device=device)
+        # Optional cost channel (Lagrangian/RCPO constrained variant). Always
+        # allocated (cheap) but only populated/used in Lagrangian mode; for the
+        # default dual-channel path these stay zero and never enter a loss.
+        self.values_cost  = torch.zeros(self.T, self.N, device=device)
+        self.rewards_cost = torch.zeros(self.T, self.N, device=device)
         self.dones       = torch.zeros(self.T, self.N, device=device)
 
         # Ragged Python lists for the graph observations + masks.
@@ -142,6 +147,8 @@ class RolloutBuffer:
         values_d:     torch.Tensor,           # (N,)
         rewards_p:    np.ndarray,             # (N,)
         rewards_d:    np.ndarray,             # (N,)
+        values_cost:  Optional[torch.Tensor] = None,   # (N,) — Lagrangian only
+        rewards_cost: Optional[np.ndarray]   = None,   # (N,) — Lagrangian only
         dones:        np.ndarray,             # (N,) bool/float
     ) -> None:
         """Push one (N-wide) timestep into the buffer."""
@@ -164,6 +171,11 @@ class RolloutBuffer:
                                                 device=self.device)
         self.rewards_d[t]    = torch.as_tensor(rewards_d, dtype=torch.float32,
                                                 device=self.device)
+        if values_cost is not None:
+            self.values_cost[t]  = values_cost.detach()
+        if rewards_cost is not None:
+            self.rewards_cost[t] = torch.as_tensor(rewards_cost, dtype=torch.float32,
+                                                    device=self.device)
         self.dones[t]        = torch.as_tensor(dones, dtype=torch.float32,
                                                 device=self.device)
         # Ragged lists — store references (env emits a fresh dict each step)
@@ -183,6 +195,8 @@ class RolloutBuffer:
         advantages_d:    torch.Tensor,    # (T, N)
         returns_p:       torch.Tensor,    # (T, N)
         returns_d:       torch.Tensor,    # (T, N)
+        advantages_cost: Optional[torch.Tensor] = None,   # (T, N) — Lagrangian
+        returns_cost:    Optional[torch.Tensor] = None,   # (T, N) — Lagrangian
         seed:            Optional[int] = None,
     ):
         """Yield mini-batches as plain dicts for the PPO update loop.
@@ -234,13 +248,17 @@ class RolloutBuffer:
         adv_d_flat        = advantages_d.reshape(total)
         ret_p_flat        = returns_p.reshape(total)
         ret_d_flat        = returns_d.reshape(total)
+        has_cost          = (advantages_cost is not None) and (returns_cost is not None)
+        if has_cost:
+            adv_cost_flat = advantages_cost.reshape(total)
+            ret_cost_flat = returns_cost.reshape(total)
 
         for mb in range(num_minibatches):
             start = mb * mb_size
             end   = start + mb_size
             idx_t = perm[start:end]
             idx_list = idx_t.tolist()
-            yield {
+            mb = {
                 "graph_obs":       [self.graph_obs[i]    for i in idx_list],
                 "action_masks":    [self.action_masks[i] for i in idx_list],
                 "actions":         actions_flat[idx_t].to(self.device),
@@ -252,6 +270,10 @@ class RolloutBuffer:
                 "returns_p":       ret_p_flat[idx_t].to(self.device),
                 "returns_d":       ret_d_flat[idx_t].to(self.device),
             }
+            if has_cost:
+                mb["advantages_cost"] = adv_cost_flat[idx_t].to(self.device)
+                mb["returns_cost"]    = ret_cost_flat[idx_t].to(self.device)
+            yield mb
 
 
 # =====================================================================

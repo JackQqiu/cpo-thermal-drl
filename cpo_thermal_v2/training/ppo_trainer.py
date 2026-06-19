@@ -74,6 +74,10 @@ class PPOUpdateMetrics:
     advantage_p_std:   float = 0.0
     advantage_d_mean:  float = 0.0
     advantage_d_std:   float = 0.0
+    # Lagrangian / RCPO constrained variant (0 / inert when disabled)
+    lam:               float = 0.0
+    cost_per_episode:  float = 0.0
+    loss_value_cost:   float = 0.0
 
 
 class PPOTrainer:
@@ -120,6 +124,12 @@ class PPOTrainer:
         thermal_blind:   bool  = False,
         action_mode:     str   = "auto_only",
         delay_warmup_steps: int = 0,
+        # Lagrangian / RCPO constrained variant (all inert by default)
+        lagrangian:      bool  = False,
+        cost_limit:      float = 0.0,
+        lam_init:        float = 0.0,
+        lam_lr:          float = 0.0,
+        lam_max:         float = 10.0,
     ):
         self.model = model
         self.optim = optimizer
@@ -146,6 +156,14 @@ class PPOTrainer:
         self.delay_warmup_steps = int(delay_warmup_steps)
         self._global_step       = 0
         self._effective_delay_loss_coef = float(delay_loss_coef)
+        # Lagrangian / RCPO constrained variant.  When lagrangian=False the
+        # cost channel is never read and the update is byte-identical to the
+        # standard dual-channel PPO.
+        self.lagrangian = bool(lagrangian)
+        self.cost_limit = float(cost_limit)
+        self.lam        = float(lam_init)
+        self.lam_lr     = float(lam_lr)
+        self.lam_max    = float(lam_max)
 
     # =================================================================
     # Top-level update
@@ -155,6 +173,7 @@ class PPOTrainer:
         buffer:           RolloutBuffer,
         last_values_p:    torch.Tensor,    # (N,)  V_p(s_T) for bootstrap
         last_values_d:    torch.Tensor,    # (N,)  V_d(s_T) for bootstrap
+        last_values_cost: Optional[torch.Tensor] = None,  # (N,) — Lagrangian
     ) -> PPOUpdateMetrics:
         """Run a full PPO update phase from the filled buffer.
 
@@ -201,6 +220,36 @@ class PPOTrainer:
             lam         = self.gae_lambda,
         )
 
+        # ------------ 1b. Lagrangian cost channel (RCPO) ------------
+        # Constrained variant only.  We (i) run a third GAE pass on the
+        # per-step cost (violation indicator) using the cost critic V_cost;
+        # (ii) estimate the realised mean cost PER EPISODE Ĵ_C from the raw
+        # cost rewards (true scale — needed to track the limit); (iii) take
+        # one dual-ascent step on λ toward Ĵ_C ≤ cost_limit.  The cost
+        # ADVANTAGE is normalised like the others below (it only sets a
+        # gradient DIRECTION; λ carries the scale), while Ĵ_C stays raw.
+        adv_cost = ret_cost = None
+        cost_per_episode = 0.0
+        if self.lagrangian:
+            if last_values_cost is None:
+                last_values_cost = torch.zeros_like(last_values_d)
+            adv_cost, ret_cost = compute_gae(
+                rewards     = buffer.rewards_cost,
+                values      = buffer.values_cost,
+                dones       = buffer.dones,
+                last_values = last_values_cost,
+                gamma       = self.gamma,
+                lam         = self.gae_lambda,
+            )
+            n_eps = float(buffer.dones.sum().item())
+            total_cost = float(buffer.rewards_cost.sum().item())
+            cost_per_episode = total_cost / max(1.0, n_eps)
+            # Dual ascent: λ ← clip(λ + lr·(Ĵ_C − limit), 0, λ_max).
+            self.lam = float(np.clip(
+                self.lam + self.lam_lr * (cost_per_episode - self.cost_limit),
+                0.0, self.lam_max,
+            ))
+
         # ------------ 2. Per-channel advantage normalisation ------------
         # IMPORTANT: each channel normalises independently.  Sharing
         # would let the higher-magnitude placement channel swamp the
@@ -213,12 +262,15 @@ class PPOTrainer:
         if self.normalize_advantages:
             adv_p = normalise_advantages(adv_p)
             adv_d = normalise_advantages(adv_d)
+            if adv_cost is not None:
+                adv_cost = normalise_advantages(adv_cost)
 
         # ------------ 3. PPO epochs over minibatches ------------
         metrics = PPOUpdateMetrics(
             advantage_p_mean=adv_p_mean, advantage_p_std=adv_p_std,
             advantage_d_mean=adv_d_mean, advantage_d_std=adv_d_std,
             lr=float(self.optim.param_groups[0]["lr"]),
+            lam=self.lam, cost_per_episode=cost_per_episode,
         )
         n_updates = 0
 
@@ -228,6 +280,7 @@ class PPOTrainer:
                 num_minibatches=self.num_minibatches,
                 advantages_p=adv_p, advantages_d=adv_d,
                 returns_p=ret_p, returns_d=ret_d,
+                advantages_cost=adv_cost, returns_cost=ret_cost,
                 seed=None,    # different shuffle each call
             )
             for mb in mb_iter:
@@ -238,6 +291,7 @@ class PPOTrainer:
                 metrics.loss_actor_d    += stats["loss_actor_d"]
                 metrics.loss_value_p    += stats["loss_value_p"]
                 metrics.loss_value_d    += stats["loss_value_d"]
+                metrics.loss_value_cost += stats["loss_value_cost"]
                 metrics.entropy_p       += stats["entropy_p"]
                 metrics.entropy_d       += stats["entropy_d"]
                 metrics.approx_kl_p     += stats["approx_kl_p"]
@@ -249,8 +303,8 @@ class PPOTrainer:
 
         # Mean over total minibatch updates
         for k in ("loss_total", "loss_actor_p", "loss_actor_d",
-                  "loss_value_p", "loss_value_d", "entropy_p",
-                  "entropy_d", "approx_kl_p", "approx_kl_d",
+                  "loss_value_p", "loss_value_d", "loss_value_cost",
+                  "entropy_p", "entropy_d", "approx_kl_p", "approx_kl_d",
                   "clip_frac_p", "clip_frac_d", "grad_norm"):
             setattr(metrics, k, getattr(metrics, k) / max(1, n_updates))
 
@@ -286,9 +340,20 @@ class PPOTrainer:
         v_p_new         = out["v_placement"]
         v_d_new         = out["v_delay"]
 
-        # 3. Compute clipped policy losses for each head
+        # 3. Compute clipped policy losses for each head.
+        # Lagrangian/RCPO: fold the cost advantage into BOTH heads as
+        # A_head − λ·A_cost.  Summing the per-head surrogates then yields the
+        # RCPO cost gradient −λ·A_cost·∇log(π_place·π_delay) on the joint
+        # policy (both actions jointly determine the thermal cost).
         adv_p = mb["advantages_p"]
         adv_d = mb["advantages_d"]
+        v_cost_new = out["v_cost"]
+        loss_value_cost = v_cost_new.new_zeros(())
+        if self.lagrangian and "advantages_cost" in mb:
+            adv_cost = mb["advantages_cost"]
+            adv_p = adv_p - self.lam * adv_cost
+            adv_d = adv_d - self.lam * adv_cost
+            loss_value_cost = self._value_loss(v_cost_new, mb["returns_cost"])
 
         clip_loss_p, kl_p, clip_frac_p = self._clip_loss(
             log_probs_p_new, mb["log_probs_p_old"], adv_p,
@@ -308,7 +373,7 @@ class PPOTrainer:
         # this equals self.delay_loss_coef and behaviour is unchanged.
         c = self._effective_delay_loss_coef
         loss_actor   = clip_loss_p + c * clip_loss_d
-        loss_value   = 0.5 * (loss_value_p + c * loss_value_d)
+        loss_value   = 0.5 * (loss_value_p + c * loss_value_d) + 0.5 * loss_value_cost
         loss_entropy = -(entropy_p_new.mean() + c * entropy_d_new.mean())
         total        = loss_actor + self.vf_coef * loss_value + self.ent_coef * loss_entropy
 
@@ -326,6 +391,7 @@ class PPOTrainer:
             "loss_actor_d":   float(clip_loss_d.detach().item()),
             "loss_value_p":   float(loss_value_p.detach().item()),
             "loss_value_d":   float(loss_value_d.detach().item()),
+            "loss_value_cost": float(loss_value_cost.detach().item()),
             "entropy_p":      float(entropy_p_new.mean().detach().item()),
             "entropy_d":      float(entropy_d_new.mean().detach().item()),
             "approx_kl_p":    float(kl_p),

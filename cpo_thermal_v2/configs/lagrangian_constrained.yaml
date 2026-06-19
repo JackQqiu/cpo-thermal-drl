@@ -1,0 +1,58 @@
+# =====================================================================
+# lagrangian_constrained.yaml — Constrained-PPO (RCPO / Lagrangian) baseline
+# =====================================================================
+# Reviewer 2 asked for a formal constrained-optimization comparison
+# (CMDP / constrained PPO / Lagrangian RL) against our reward-shaping
+# approach.  This config trains a variant with the SAME hetero-GAT
+# architecture and SAME reward shaping, but adds a cost critic V_cost and a
+# dual variable λ raised by gradient ascent until the expected per-episode
+# thermal violations fall below `cost_limit` (Tessler et al. 2019 RCPO /
+# Stooke et al. 2020 PID-Lagrangian).
+#
+# Identical to stage2_hybrid (hybrid mode, 1.5M steps, warm-start from the
+# Stage-1 backbone) EXCEPT for the `training.lagrangian` block — so the ONLY
+# difference vs Ours is the safety mechanism (formal constraint vs soft
+# reward penalty), isolating exactly the comparison the reviewer requested.
+#
+# Expected wall time on 1×V100 + 16 envs: ~3h (≈ one Stage-2-equivalent).
+# =====================================================================
+_inherit: default
+
+env:
+  action_mode: hybrid
+
+training:
+  total_steps:        1_500_000
+  learning_rate:      1.0e-4
+  warm_start_path:   "checkpoints/stage1_auto_only_N17/best.pt"
+  warm_start_strict:  false       # delay head + V_delay + V_cost missing → ok
+
+  # --- Lagrangian / RCPO constrained variant ---
+  # The cost signal is the per-step violation indicator already emitted by
+  # the env as info['would_violate_without_delay'] (same signal the paper
+  # reports as the headline violation rate), so the constraint is directly
+  # comparable to the main results table.
+  lagrangian:
+    enabled:     true
+    cost_signal: would_violate    # info['would_violate_without_delay']
+    cost_limit:  0.1              # E[violations / episode] ≤ 0.1
+    lam_init:    0.0              # start unconstrained; raise λ as needed
+    lam_lr:      0.02             # dual-ascent step per PPO update phase
+    lam_max:     10.0             # clip (same order as reward hard_wall_pen=30)
+
+curriculum:
+  # Skip "cold" — warm-start backbone has seen the full distribution.
+  schedule:
+    - name:               warm
+      until_step:           400_000
+      initial_temp_range: [40.0, 65.0]
+      max_dag_size:       15
+    - name:               hot
+      until_step:         null
+      initial_temp_range: [60.0, 75.0]
+      max_dag_size:       null
+
+logging:
+  run_name: lagrangian_constrained_N17
+  checkpoint_dir: "checkpoints/lagrangian_constrained_N17"
+  tb_log_dir:     "tb_logs/lagrangian_constrained_N17"
