@@ -82,7 +82,7 @@ LAGRANGIAN_CKPT = "checkpoints/lagrangian_constrained_N17/best.pt"
 # =====================================================================
 # base env kwargs (mirror default.yaml env defaults + eval overrides)
 # =====================================================================
-def make_base_env_kwargs() -> Dict:
+def make_base_env_kwargs(temp_lo: float = 50.0, temp_hi: float = 65.0) -> Dict:
     """Construct the env kwargs shared by every cell.
 
     Mirrors default.yaml env defaults with eval_scaling.yaml per-cell
@@ -121,7 +121,7 @@ def make_base_env_kwargs() -> Dict:
         temp_rise_per_ms_asic=0.08,
         temp_rise_per_ms_oe=0.18,
         # evaluation regime (eval_scaling.yaml overrides)
-        initial_temp_range=INITIAL_TEMP_RANGE,
+        initial_temp_range=(temp_lo, temp_hi),
         max_dag_size=None,
         dags_per_episode=DAGS_PER_EPISODE,
         truncate_mode="hard",
@@ -211,8 +211,9 @@ def aggregate(df_eps: pd.DataFrame, num_nodes: int) -> List[Dict]:
 # Main eval
 # =====================================================================
 def run_eval(nodes: List[int], num_episodes: int, device: str,
-             deterministic: bool, out_csv: str) -> pd.DataFrame:
-    base_kwargs = make_base_env_kwargs()
+             deterministic: bool, out_csv: str,
+             temp_lo: float = 50.0, temp_hi: float = 65.0) -> pd.DataFrame:
+    base_kwargs = make_base_env_kwargs(temp_lo, temp_hi)
     factories = build_scheduler_factories(device, deterministic)
 
     work_dir = os.path.dirname(os.path.abspath(out_csv)) or "."
@@ -277,6 +278,11 @@ def main() -> None:
     p.add_argument("--out", type=str,
                    default="repro_outputs/eval_lagrangian_matrix.csv",
                    help="Output CSV path.")
+    p.add_argument("--temp-lo", type=float, default=50.0,
+                   help="initial_temp_range low (eval_scaling=50; use 60+ for "
+                        "a hot stress regime where the safety mechanism binds).")
+    p.add_argument("--temp-hi", type=float, default=65.0,
+                   help="initial_temp_range high (eval_scaling=65).")
     args = p.parse_args()
 
     df = run_eval(
@@ -285,6 +291,8 @@ def main() -> None:
         device=args.device,
         deterministic=not args.no_deterministic,
         out_csv=args.out,
+        temp_lo=args.temp_lo,
+        temp_hi=args.temp_hi,
     )
 
     # Pretty final table
