@@ -205,7 +205,9 @@ def make_base_env_kwargs(temp_lo: float, temp_hi: float,
 # =====================================================================
 # Scheduler factories
 # =====================================================================
-def build_scheduler_factories(device: str, deterministic: bool
+def build_scheduler_factories(device: str, deterministic: bool,
+                              ckpt: str = OURS_HYBRID_CKPT,
+                              label: str = "Ours-hybrid"
                               ) -> List[Tuple[str, object]]:
     """Build the scheduler factory list.
 
@@ -225,21 +227,21 @@ def build_scheduler_factories(device: str, deterministic: bool
 
     factories: List[Tuple[str, object]] = []
 
-    if not os.path.exists(OURS_HYBRID_CKPT):
+    if not os.path.exists(ckpt):
         raise FileNotFoundError(
-            f"[sweep] primary checkpoint missing: {OURS_HYBRID_CKPT}")
+            f"[sweep] primary checkpoint missing: {ckpt}")
 
-    def ours_hybrid_factory(num_nodes: int, action_mode: str):
+    def ours_factory(num_nodes: int, action_mode: str):
         if action_mode != "hybrid":
-            raise ValueError("Ours-hybrid only runs at action_mode=hybrid")
+            raise ValueError(f"{label} only runs at action_mode=hybrid")
         return TrainedPPOScheduler(
-            ckpt_path=OURS_HYBRID_CKPT,
+            ckpt_path=ckpt,
             action_mode="hybrid",
             deterministic=deterministic,
             device=device,
-            scheduler_label="Ours-hybrid",
+            scheduler_label=label,
         )
-    factories.append(("Ours-hybrid", ours_hybrid_factory))
+    factories.append((label, ours_factory))
 
     # Explicit note about the no-RC-edge ablation decision.
     if os.path.exists(NO_RC_EDGE_CKPT):
@@ -291,10 +293,11 @@ def aggregate_cell(df_eps: pd.DataFrame, param: str, delta: float) -> List[Dict]
 def run_sweep(params: List[str], deltas: List[float], num_episodes: int,
               seed_base: int, device: str, deterministic: bool,
               temp_lo: float, temp_hi: float, dags_per_episode: int,
-              out_csv: str) -> pd.DataFrame:
+              out_csv: str, ckpt: str = OURS_HYBRID_CKPT,
+              label: str = "Ours-hybrid") -> pd.DataFrame:
     A0, B0, D0, used_disk = build_nominal_matrices()
     base_kwargs = make_base_env_kwargs(temp_lo, temp_hi, dags_per_episode)
-    factories = build_scheduler_factories(device, deterministic)
+    factories = build_scheduler_factories(device, deterministic, ckpt, label)
 
     work_dir = os.path.dirname(os.path.abspath(out_csv)) or "."
     os.makedirs(work_dir, exist_ok=True)
@@ -418,6 +421,12 @@ def main() -> None:
                    help="Tiny end-to-end run: param=G_cross, deltas={0.0,+0.3}, "
                         "5 episodes. Overrides --params/--deltas/--episodes "
                         "and writes to repro_outputs/sweep_smoke.csv.")
+    p.add_argument("--ckpt", type=str, default=OURS_HYBRID_CKPT,
+                   help="Policy checkpoint to sweep (default Ours-hybrid; pass "
+                        "the Lagrangian ckpt to compare its calibration "
+                        "tolerance against Ours).")
+    p.add_argument("--label", type=str, default="Ours-hybrid",
+                   help="Scheduler label written into the output rows.")
     args = p.parse_args()
 
     if args.smoke:
@@ -444,6 +453,8 @@ def main() -> None:
         temp_hi=args.temp_hi,
         dags_per_episode=args.dags_per_episode,
         out_csv=out_csv,
+        ckpt=args.ckpt,
+        label=args.label,
     )
 
     # Pretty final table
