@@ -207,7 +207,8 @@ def make_base_env_kwargs(temp_lo: float, temp_hi: float,
 # =====================================================================
 def build_scheduler_factories(device: str, deterministic: bool,
                               ckpt: str = OURS_HYBRID_CKPT,
-                              label: str = "Ours-hybrid"
+                              label: str = "Ours-hybrid",
+                              mode: str = "hybrid"
                               ) -> List[Tuple[str, object]]:
     """Build the scheduler factory list.
 
@@ -232,11 +233,11 @@ def build_scheduler_factories(device: str, deterministic: bool,
             f"[sweep] primary checkpoint missing: {ckpt}")
 
     def ours_factory(num_nodes: int, action_mode: str):
-        if action_mode != "hybrid":
-            raise ValueError(f"{label} only runs at action_mode=hybrid")
+        if action_mode != mode:
+            raise ValueError(f"{label} only runs at action_mode={mode}")
         return TrainedPPOScheduler(
             ckpt_path=ckpt,
-            action_mode="hybrid",
+            action_mode=mode,
             deterministic=deterministic,
             device=device,
             scheduler_label=label,
@@ -294,10 +295,11 @@ def run_sweep(params: List[str], deltas: List[float], num_episodes: int,
               seed_base: int, device: str, deterministic: bool,
               temp_lo: float, temp_hi: float, dags_per_episode: int,
               out_csv: str, ckpt: str = OURS_HYBRID_CKPT,
-              label: str = "Ours-hybrid") -> pd.DataFrame:
+              label: str = "Ours-hybrid",
+              mode: str = "hybrid") -> pd.DataFrame:
     A0, B0, D0, used_disk = build_nominal_matrices()
     base_kwargs = make_base_env_kwargs(temp_lo, temp_hi, dags_per_episode)
-    factories = build_scheduler_factories(device, deterministic, ckpt, label)
+    factories = build_scheduler_factories(device, deterministic, ckpt, label, mode)
 
     work_dir = os.path.dirname(os.path.abspath(out_csv)) or "."
     os.makedirs(work_dir, exist_ok=True)
@@ -342,7 +344,7 @@ def run_sweep(params: List[str], deltas: List[float], num_episodes: int,
                 base_env_kwargs=env_kwargs,
                 scheduler_factories=factories,
                 num_nodes_list=[NUM_NODES],
-                action_mode_list=["hybrid"],
+                action_mode_list=[mode],
                 num_episodes=num_episodes,
                 output_dir=grid_scratch,
                 seed_base=seed_base,           # SAME across all cells → paired
@@ -427,6 +429,10 @@ def main() -> None:
                         "tolerance against Ours).")
     p.add_argument("--label", type=str, default="Ours-hybrid",
                    help="Scheduler label written into the output rows.")
+    p.add_argument("--mode", type=str, default="hybrid",
+                   choices=["hybrid", "auto_only", "agent_only"],
+                   help="action_mode for the swept policy (use auto_only for "
+                        "the R2.1-on-auto_only sweep).")
     args = p.parse_args()
 
     if args.smoke:
@@ -455,6 +461,7 @@ def main() -> None:
         out_csv=out_csv,
         ckpt=args.ckpt,
         label=args.label,
+        mode=args.mode,
     )
 
     # Pretty final table
