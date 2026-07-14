@@ -12,20 +12,8 @@
 # -------------------------------------------------------------------
 # CPO v2 — Decima (Mao 2019 SIGCOMM) — thermal variant
 #
-# !!!! BLOCKED — DO NOT SUBMIT YET !!!!
-# This sbatch references configs/train_decima_true_thermal.yaml +
-# uses baselines/decima_true.py, both of which are currently STUBS.
-# See paper_drafts/decima_true_implementation_checklist.md for the
-# 10-step implementation plan (~5-7 days work).
-#
 # Variant 2 of 2: thermal-aware reward (SAME as Ours). Pair with
 # train_decima_true_vanilla.sbatch for the full ablation cube.
-#
-# Once code support is implemented:
-#   1. Implement decima_true.py per checklist
-#   2. Wire algorithm dispatch + architecture registry per yaml header
-#   3. Remove the `_BLOCKED_DO_NOT_RUN:` line from the yaml
-#   4. Resubmit this sbatch
 #
 # Output: checkpoints/decima_true_thermal_N17/
 # -------------------------------------------------------------------
@@ -49,14 +37,14 @@ echo "  CPUs         = $SLURM_CPUS_PER_TASK"
 DECIMA_YAML="cpo_thermal_v2/configs/train_decima_true_thermal.yaml"
 if grep -q "^_BLOCKED_DO_NOT_RUN:" "$DECIMA_YAML"; then
     echo "❌ Decima true thermal yaml is marked BLOCKED — code support not yet implemented."
-    echo "   See yaml header + paper_drafts/decima_true_implementation_checklist.md"
+    echo "   See the yaml header."
     echo "   File: $DECIMA_YAML"
     exit 1
 fi
 
-# Activate conda env
-source /project/qiuzhaoqi/miniconda3/etc/profile.d/conda.sh
-conda activate cpo_drl
+# Activate conda env (uncomment and adjust for your cluster)
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate cpo_drl
 
 mkdir -p logs
 

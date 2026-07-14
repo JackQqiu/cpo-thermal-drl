@@ -1,7 +1,7 @@
 # =====================================================================
 # eval_grand_matrix.yaml — Phase X-B paper §5 grand scaling matrix (HOT)
 # =====================================================================
-# CLAUDE.md Stage 5 original scope: 10 schedulers × 5 N × 500 ep paired.
+# Original full-matrix scope: 10 schedulers × 5 N × 500 ep paired.
 # This yaml covers the HOT-ambient slice only — ambient sweep (cold /
 # warm / extreme) uses 3 sibling yamls + a shell driver
 # (`cpo_thermal_v2/scripts/eval_grand_matrix.sh`).

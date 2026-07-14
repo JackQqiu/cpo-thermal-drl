@@ -2,9 +2,9 @@
 sanity_check_env_fixed.py
 =========================
 
-Stage 0 consolidated sanity check for the env fixes documented in
-CLAUDE.md (Bug 1: ``_maybe_precool`` predicted-peak loop; Bug 2:
-``temp_rise_per_ms_*`` constants aligned to the RC matrix calibration).
+Stage 0 consolidated sanity check for the two env fixes (Bug 1:
+``_maybe_precool`` predicted-peak loop; Bug 2: ``temp_rise_per_ms_*``
+constants aligned to the RC matrix calibration).
 
 Runs four checks A/B/C/D and prints PASS/FAIL for each plus an overall
 verdict.  Must be run on CPU (no GPU required).  Stage 1 retraining is

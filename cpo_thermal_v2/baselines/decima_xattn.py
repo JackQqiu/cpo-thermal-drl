@@ -45,8 +45,8 @@ Architecture
 * Trainer: PPO with clipping + GAE.  Same multi-env + minibatch
   recipe as ``train_hgate_ppo.py`` (HK-4.5 / HK-4.6 perf fixes apply).
 
-HANDOFF discipline: reuses ``CrossAttentionActor`` from models/ per
-user spec ("Actor: Cross-attention actor 复用").  Does NOT touch
+Composition rule: reuses ``CrossAttentionActor`` from models/ by
+design.  Does NOT touch
 ``decima.py`` / ``hgate_ppo.py`` / ``cross_attention_actor.py``
 themselves — D2 is a pure composition baseline.
 """

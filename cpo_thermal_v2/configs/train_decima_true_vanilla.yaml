@@ -19,11 +19,6 @@
 # Chain reads: vanilla -> thermal isolates reward; thermal -> fair
 # isolates algo+GNN; fair -> Ours isolates RC edge attribute.
 # =====================================================================
-# !!!! BLOCKED — DO NOT SUBMIT YET !!!!
-# Same code-support requirements as the thermal variant.  See:
-#   - baselines/decima_true.py            (NotImplementedError throughout)
-#   - paper_drafts/decima_true_implementation_checklist.md  (10-step plan)
-# =====================================================================
 _inherit: default
 
 training:

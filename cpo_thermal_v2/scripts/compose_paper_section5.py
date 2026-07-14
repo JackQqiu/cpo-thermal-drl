@@ -430,8 +430,7 @@ def main():
         print(f"[write] {path}  ({len(content):,} chars)")
 
     print(f"\n[done] all Phase G artifacts in {OUT_DIR}/")
-    print("\nNext: switch to paper-draft branch + plug-in to "
-          "paper_drafts/section5_main_results.tex + section5X_hybrid_case_study.tex")
+    print("\nNext: plug the artifacts into the paper's Section 5 tables and figures.")
 
 
 if __name__ == "__main__":

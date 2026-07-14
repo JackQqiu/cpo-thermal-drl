@@ -7,8 +7,6 @@
 #   cd <REPO_ROOT>
 #   bash cpo_thermal_v2/scripts/pull_horizon_data.sh \
 #       2>&1 | tee horizon_data_$(date +%Y%m%d_%H%M%S).log
-#
-# Then paste the log to Claude. NO FABRICATED NUMBERS.
 # =====================================================================
 
 set -e
@@ -170,7 +168,6 @@ for setting in settings:
 
 print()
 print("=" * 78)
-print("END — paste this entire log to Claude. No fabrication; all numbers")
-print("come straight from your eval_results/horizon_scan_v2/*.csv files.")
+print("END — all numbers come straight from eval_results/horizon_scan_v2/*.csv.")
 print("=" * 78)
 PYEOF

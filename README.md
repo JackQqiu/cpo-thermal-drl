@@ -2,7 +2,7 @@
 
 Thermal-aware microservice DAG scheduling for Co-Packaged Optics (CPO) data centres. A permutation-equivariant heterogeneous graph encoder with a cross-attention factored actor and dual-channel critic, trained with PPO under a two-stage curriculum.
 
-This repository accompanies the manuscript *Permutation-Equivariant Graph Reinforcement Learning for Thermal-Aware Microservice Scheduling in Co-Packaged Optics Data Centers*, submitted to *MDPI Symmetry* (2026).
+This repository accompanies the manuscript *Permutation-Equivariant Graph Reinforcement Learning for Thermal-Aware Microservice Scheduling in Co-Packaged Optics Data Centers*, accepted for publication in *MDPI Symmetry* (2026).
 
 ---
 
@@ -18,11 +18,11 @@ This repository accompanies the manuscript *Permutation-Equivariant Graph Reinfo
 ## Installation
 
 ```bash
-git clone <repo_url>
-cd cpo_project
+git clone https://github.com/JackQqiu/cpo-thermal-drl.git
+cd cpo-thermal-drl
 conda create -n cpo_rl python=3.10
 conda activate cpo_rl
-pip install -r requirements.txt
+pip install -r cpo_thermal_v2/requirements.txt
 ```
 
 If `torch_geometric` install fails, install PyTorch first, then follow the [PyG install matrix](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html) for your CUDA version.
@@ -56,7 +56,7 @@ Reproducing paper tables and figures (after training):
 
 ```bash
 # §5.2 main results table (hot N=17, n=500 paired episodes)
-python -m cpo_thermal_v2.scripts.eval_grand_matrix --regime hot
+python -m cpo_thermal_v2.evaluation.evaluate --config cpo_thermal_v2/configs/eval_grand_matrix.yaml
 
 # §5.4 generalisation envelope (5 sizes × 4 ambient regimes)
 sbatch cpo_thermal_v2/scripts/eval_scaling.sbatch
@@ -104,7 +104,7 @@ cpo_thermal_v2/
              and Qiu, Wenjie and Xu, Bo and Deng, Tianping},
   journal = {Symmetry},
   year    = {2026},
-  note    = {Under review.}
+  note    = {In press.}
 }
 ```
 

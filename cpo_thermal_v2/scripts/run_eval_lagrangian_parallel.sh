@@ -37,7 +37,7 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 # --- interpreter resolution (server default, but works locally) ---
-SERVER_PY="/home/mfy/anaconda3/envs/cpo_rl/bin/python"
+SERVER_PY="${HOME}/anaconda3/envs/cpo_rl/bin/python"
 if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x "${SERVER_PY}" ]]; then
     PYTHON="${SERVER_PY}"

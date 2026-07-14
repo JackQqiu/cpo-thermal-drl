@@ -23,7 +23,7 @@
 # Wallclock estimate: 24h --time chosen because train_hgate_ppo.py
 # is currently single-env (one SyncVectorEnv worker).  Mac CPU smoke
 # clocked ~75 step/s; V100 CPU expected to be similar (env stepping
-# is Python-bound, not GPU-bound, see paper_drafts/throughput_debug.md).
+# is Python-bound, not GPU-bound).
 #   1 M steps  ~ 3.7h
 #   5 M steps  ~ 18h  <-- the configured total_steps
 # A future multi-env refactor would shrink this to ~3h via 8-16-way
@@ -42,8 +42,7 @@ set -o pipefail
 cd "$SLURM_SUBMIT_DIR"
 export PYTHONPATH=".:${PYTHONPATH:-}"
 
-# NFS pre-warm (cheap if hot, ~30 s if cold; see
-# paper_drafts/throughput_debug.md §4)
+# NFS pre-warm (cheap if hot, ~30 s if cold)
 cat data_pipeline/process/alibaba_dags_v2.json > /dev/null 2>&1 || \
     cat cpo_thermal_v2/data_pipeline/process/alibaba_dags_v2.json > /dev/null 2>&1 || \
     true
@@ -60,14 +59,14 @@ echo "  CPUs         = $SLURM_CPUS_PER_TASK"
 HGATE_YAML="cpo_thermal_v2/configs/train_hgate_ppo.yaml"
 if grep -q "^_BLOCKED_DO_NOT_RUN:" "$HGATE_YAML"; then
     echo "❌ HGATE-PPO yaml is marked BLOCKED — code support not yet implemented."
-    echo "   See yaml header + paper_drafts/hgate_ppo_checklist.md"
+    echo "   See the yaml header."
     echo "   File: $HGATE_YAML"
     exit 1
 fi
 
-# Activate conda env
-source /project/qiuzhaoqi/miniconda3/etc/profile.d/conda.sh
-conda activate cpo_drl
+# Activate conda env (uncomment and adjust for your cluster)
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate cpo_drl
 
 mkdir -p logs
 

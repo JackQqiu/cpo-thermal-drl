@@ -56,8 +56,8 @@ echo "  GPU          = $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/de
 echo "  CPUs         = $SLURM_CPUS_PER_TASK"
 
 # Activate conda env (same as the real training sbatch)
-source /project/qiuzhaoqi/miniconda3/etc/profile.d/conda.sh
-conda activate cpo_drl
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate cpo_drl
 
 mkdir -p logs
 

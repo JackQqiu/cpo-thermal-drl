@@ -2,7 +2,7 @@
 """
 test_decima_true.py — per-step acceptance tests for Decima true.
 
-Maps 1:1 to paper_drafts/decima_true_implementation_checklist.md.
+Covers each implementation step of ``baselines/decima_true.py``.
 Each test prints "[PASS]" or "[FAIL: <reason>]" and contributes to an
 overall exit code (0 = all pass).
 

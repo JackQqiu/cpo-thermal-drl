@@ -2,11 +2,10 @@
 baselines/hgate_ppo.py — HGATE-PPO (Wu 2025 IEEE IoT Journal) reproduction
 ==========================================================================
 
-Implementation: BLOCKED — scaffold only.  See
-``paper_drafts/hgate_ppo_checklist.md`` for the 8-step implementation
-plan and the wiring decisions to make before Step 1.
+Faithful from-scratch reproduction of Wu 2025, adapted to the CPO
+thermal scheduling environment (see Reference below).
 
-Delta vs Ours (CLAUDE.md §3 Stage 3):
+Delta vs Ours:
   - Hetero GATv2 encoder (task / proc node types) but NO RC coupling
     edge attribute and NO proc<->proc edges (Wu 2025's graph is
     task-task DAG + task-proc affinity only).
@@ -20,7 +19,7 @@ Delta vs Ours (CLAUDE.md §3 Stage 3):
 the CPO-specific RC edge attribute AND the cross-attention placement
 actor.  HGATE-PPO -> decima_fair further removes hetero edge typing.
 
-HANDOFF discipline: do NOT import HeteroEncoder / CrossAttentionActor /
+Reproduction discipline: do NOT import HeteroEncoder / CrossAttentionActor /
 DualCritic / PPOActorCritic from cpo_thermal_v2.models.  This is a
 faithful reimplementation of Wu 2025; sharing code with Ours would
 defeat the controlled comparison §5 depends on.  Build the encoder +

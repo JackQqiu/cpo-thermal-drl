@@ -2,9 +2,9 @@
 baselines/decima_true.py — Decima (Mao 2019 SIGCOMM) faithful reproduction
 ==========================================================================
 
-Step 1-7 implementation per
-``paper_drafts/decima_true_implementation_checklist.md``.  See that file
-for per-step acceptance criteria.
+Faithful reproduction of Mao et al. 2019 (SIGCOMM), adapted to the CPO
+thermal scheduling environment.  Per-step acceptance tests live in
+``cpo_thermal_v2/scripts/test_decima_true.py``.
 
 Two variants supported via yaml config (model class identical for both;
 the only difference is the reward signal seen during training):
@@ -38,7 +38,7 @@ Architectural choices vs baselines/decima_fair.py
 
 Bias check
 ----------
-HANDOFF §4 explicitly forbids reusing HeteroEncoder + thermal-mask
+Reproduction rule: no reuse of HeteroEncoder or the thermal-mask
 hack here. This module imports ``torch_geometric.nn.GCNConv`` directly
 and does not touch ``cpo_thermal_v2.models.HeteroEncoder``.
 """

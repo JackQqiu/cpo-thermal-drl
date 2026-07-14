@@ -32,9 +32,9 @@ echo "  cwd          = $(pwd)"
 echo "  GPU          = $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'none')"
 echo "  CPUs         = $SLURM_CPUS_PER_TASK"
 
-# Activate conda env
-source /project/qiuzhaoqi/miniconda3/etc/profile.d/conda.sh
-conda activate cpo_drl
+# Activate conda env (uncomment and adjust for your cluster)
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate cpo_drl
 
 mkdir -p logs
 

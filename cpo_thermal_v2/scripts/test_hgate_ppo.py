@@ -2,8 +2,8 @@
 """
 test_hgate_ppo.py — per-step acceptance tests for HGATE-PPO baseline.
 
-Maps to paper_drafts/hgate_ppo_checklist.md Step 1 (Hetero GATv2
-encoder) initially; later steps add tests at the bottom of this file.
+Starts with the Hetero GATv2 encoder; later implementation steps add
+tests at the bottom of this file.
 
 Run:
     PYTHONPATH=. python cpo_thermal_v2/scripts/test_hgate_ppo.py
